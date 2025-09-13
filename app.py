@@ -269,32 +269,32 @@ def independent_metric_picks(df: pd.DataFrame, mode: str, is_hourly: bool):
                 temp_val = low_val
                 temp_src = low_src
 
-# Rain (DAILY) — driest vs wettest, with robust NaN handling
-pp_max_series = g["precip_prob_max"]
-pp_min_series = g["precip_prob_min"]
-
-# Build candidates ignoring NaNs
-pp_max_valid = g.loc[pp_max_series.notna(), ["precip_prob_max", "source"]]
-pp_min_valid = g.loc[pp_min_series.notna(), ["precip_prob_min", "source"]]
-
-pp_row = None
-pp_val = None
-pp_src = None
-
-if mode == "Optimistic":
-    # Driest possible: choose the LOWEST available daily MIN chance of rain
-    if not pp_min_valid.empty:
-        idx = pp_min_series.idxmin()
-        pp_row = g.loc[idx]
-        pp_val = pp_row.get("precip_prob_min")
-        pp_src = nice_source_name(pp_row.get("source"))
-elif mode == "Pessimistic":
-    # Wettest possible: choose the HIGHEST available daily MAX chance of rain
-    if not pp_max_valid.empty:
-        idx = pp_max_series.idxmax()
-        pp_row = g.loc[idx]
-        pp_val = pp_row.get("precip_prob_max")
-        pp_src = nice_source_name(pp_row.get("source"))
+            # Rain (DAILY) — driest vs wettest, with robust NaN handling
+            pp_max_series = g["precip_prob_max"]
+            pp_min_series = g["precip_prob_min"]
+            
+            # Build candidates ignoring NaNs
+            pp_max_valid = g.loc[pp_max_series.notna(), ["precip_prob_max", "source"]]
+            pp_min_valid = g.loc[pp_min_series.notna(), ["precip_prob_min", "source"]]
+            
+            pp_row = None
+            pp_val = None
+            pp_src = None
+            
+            if mode == "Optimistic":
+                # Driest possible: choose the LOWEST available daily MIN chance of rain
+                if not pp_min_valid.empty:
+                    idx = pp_min_series.idxmin()
+                    pp_row = g.loc[idx]
+                    pp_val = pp_row.get("precip_prob_min")
+                    pp_src = nice_source_name(pp_row.get("source"))
+            elif mode == "Pessimistic":
+                # Wettest possible: choose the HIGHEST available daily MAX chance of rain
+                if not pp_max_valid.empty:
+                    idx = pp_max_series.idxmax()
+                    pp_row = g.loc[idx]
+                    pp_val = pp_row.get("precip_prob_max")
+                    pp_src = nice_source_name(pp_row.get("source"))
 
 
             # Condition — ignore Unknown
