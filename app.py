@@ -157,10 +157,17 @@ def independent_metric_picks(df: pd.DataFrame, mode: str, is_hourly: bool):
                 pp_row = g.loc[g["precip_prob"].fillna(9999).idxmin()] if g["precip_prob"].notna().any() else None
             else:
                 pp_row = g.loc[g["precip_prob"].fillna(-1).idxmax()] if g["precip_prob"].notna().any() else None
-            # Condition
-            g["wc_rank"] = g["weathercode"].apply(lambda x: code_to_text(x)[1] if pd.notna(x) else 99)
-            cond_row = g.loc[g["wc_rank"].idxmin()] if mode == "Optimistic" else g.loc[g["wc_rank"].idxmax()]
-
+              # Condition — ignore "Unknown"
+            g["wc_text"] = g["weathercode"].apply(lambda x: code_to_text(x)[0])
+            g["wc_rank"] = g["weathercode"].apply(lambda x: code_to_text(x)[1])
+            g_valid = g[g["wc_text"] != "Unknown"]
+            if not g_valid.empty:
+                cond_row = g_valid.loc[g_valid["wc_rank"].idxmin()] if mode == "Optimistic" else g_valid.loc[g_valid["wc_rank"].idxmax()]
+                cond_val = code_to_text(cond_row.get("weathercode", None))[0]
+                cond_src = nice_source_name(cond_row.get("source"))
+            else:
+                cond_val, cond_src = "Unknown", None
+                
             rows.append({
                 "Time": k,
                 "Temp (°C)": None if temp_row is None else temp_row.get("temperature_c"),
@@ -186,11 +193,17 @@ def independent_metric_picks(df: pd.DataFrame, mode: str, is_hourly: bool):
             else:
                 pp_row = g.loc[g["precip_prob_min"].fillna(9999).idxmin()] if g["precip_prob_min"].notna().any() else None
                 pp_val = None if pp_row is None else pp_row.get("precip_prob_min")
-            # Condition
-            g["wc_rank"] = g["wcode_day"].apply(lambda x: code_to_text(x)[1] if pd.notna(x) else 99)
-            cond_row = g.loc[g["wc_rank"].idxmin()] if mode == "Optimistic" else g.loc[g["wc_rank"].idxmax()]
-            cond_val = None if cond_row is None else code_to_text(cond_row.get("wcode_day", None))[0]
-
+             # Condition — ignore "Unknown"
+            g["wc_text"] = g["wcode_day"].apply(lambda x: code_to_text(x)[0])
+            g["wc_rank"] = g["wcode_day"].apply(lambda x: code_to_text(x)[1])
+            g_valid = g[g["wc_text"] != "Unknown"]
+            if not g_valid.empty:
+                cond_row = g_valid.loc[g_valid["wc_rank"].idxmin()] if mode == "Optimistic" else g_valid.loc[g_valid["wc_rank"].idxmax()]
+                cond_val = code_to_text(cond_row.get("wcode_day", None))[0]
+                cond_src = nice_source_name(cond_row.get("source"))
+            else:
+                cond_val, cond_src = "Unknown", None
+                
             rows.append({
                 "Date": k,
                 "Temp (°C)": temp_val,
