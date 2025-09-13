@@ -454,33 +454,6 @@ def render_hourly_ios(hours_df):
 
 
 def render_hourly_stacked_side_by_side(hourly_ss):
-    
-    def render_hourly_temp_chart(hourly_ss: pd.DataFrame):
-        """Line chart of hourly optimistic vs pessimistic temps."""
-        if hourly_ss.empty:
-            return
-        
-        df_plot = hourly_ss.copy()
-        df_plot = df_plot[["Time", "Optimistic Temp", "Pessimistic Temp"]].melt(
-            id_vars="Time", var_name="Scenario", value_name="Temp (°C)"
-        )
-        df_plot["Time"] = pd.to_datetime(df_plot["Time"])
-        
-        chart = (
-            alt.Chart(df_plot)
-            .mark_line(point=True)
-            .encode(
-                x=alt.X("Time:T", title="Hour"),
-                y=alt.Y("Temp (°C):Q", title="Temperature (°C)"),
-                color=alt.Color("Scenario:N", scale=alt.Scale(scheme="set1")),
-                tooltip=["Time", "Scenario", "Temp (°C)"]
-            )
-            .properties(height=300)
-            .interactive()
-        )
-        st.altair_chart(chart, use_container_width=True)
-
-  
     """Side-by-side: stacked optimistic/pessimistic per hour, horizontally scrollable (no leading spaces)."""
     if hourly_ss.empty:
         return
@@ -631,6 +604,30 @@ def render_daily_side_by_side_inline(daily_opt: pd.DataFrame, daily_pes: pd.Data
         )
         st.markdown(block_html, unsafe_allow_html=True)
 
+def render_hourly_temp_chart(hourly_ss: pd.DataFrame):
+        """Line chart of hourly optimistic vs pessimistic temps."""
+        if hourly_ss.empty:
+            return
+        
+        df_plot = hourly_ss.copy()
+        df_plot = df_plot[["Time", "Optimistic Temp", "Pessimistic Temp"]].melt(
+            id_vars="Time", var_name="Scenario", value_name="Temp (°C)"
+        )
+        df_plot["Time"] = pd.to_datetime(df_plot["Time"])
+        
+        chart = (
+            alt.Chart(df_plot)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("Time:T", title="Hour"),
+                y=alt.Y("Temp (°C):Q", title="Temperature (°C)"),
+                color=alt.Color("Scenario:N", scale=alt.Scale(scheme="set1")),
+                tooltip=["Time", "Scenario", "Temp (°C)"]
+            )
+            .properties(height=300)
+            .interactive()
+        )
+        st.altair_chart(chart, use_container_width=True)
 
 
 
