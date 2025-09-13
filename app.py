@@ -536,13 +536,14 @@ if st.button("Get forecast", type="primary"):
         st.stop()
 
     # Prepare datasets
-# Build a rolling 24h window in the location's timezone
-# (Open-Meteo returned times are already in that tz because we requested timezone=tz)
-start = pd.Timestamp.now(tz).floor("H").tz_localize(None)   # current local hour (naive, same tz as data)
-end = start + pd.Timedelta(hours=23)
-hourly_rolling = hourly_all[(hourly_all["time"] >= start) & (hourly_all["time"] <= end)].copy()
-today = datetime.now().date()
-daily_future = daily_all[daily_all["date"] >= today].copy()
+    # Build a rolling 24h window in the location's timezone
+    # (Open-Meteo returned times are already in that tz because we requested timezone=tz)
+    start = pd.Timestamp.now(tz).floor("H").tz_localize(None)   # current local hour (naive, same tz as data)
+    end = start + pd.Timedelta(hours=23)
+    hourly_rolling = hourly_all[(hourly_all["time"] >= start) & (hourly_all["time"] <= end)].copy()
+    
+    today = datetime.now().date()
+    daily_future = daily_all[daily_all["date"] >= today].copy()
 
     # Helpers to build mode-specific tables
     def hourly_for_mode(m):
