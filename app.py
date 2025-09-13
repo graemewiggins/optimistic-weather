@@ -667,13 +667,12 @@ if st.button("Get forecast", type="primary"):
         else:
             st.info("No hourly data for today.")
 
-# Daily — stacked inline lines per day (matches your example)
-st.markdown("### Daily — Next 7 Days")
-if not daily_opt.empty or not daily_pes.empty:
-    render_daily_side_by_side_inline(daily_opt, daily_pes)
-else:
-    st.info("No daily data available for the selected models.")
-
+        # Daily — stacked inline lines per day (your requested format)
+        st.markdown("### Daily — Next 7 Days")
+        if not daily_opt.empty or not daily_pes.empty:
+            render_daily_side_by_side_inline(daily_opt, daily_pes)
+        else:
+            st.info("No daily data available for the selected models.")
 
     st.caption("Data via Open-Meteo. Temperatures in °C.")
 else:
