@@ -9,10 +9,28 @@ import streamlit as st
 st.set_page_config(page_title="Optimistic Weather", page_icon="🌤️", layout="wide")
 
 # =========================
-# CSS — slim, iOS-style
+# CSS — slim, iOS-style + horizontal scroller
 # =========================
 st.markdown("""
 <style>
+/* Headline */
+.headline { text-align:center; padding: 6px; margin-bottom: 12px; }
+.headline-city { font-size: 20px; font-weight: 600; margin-bottom: 2px; }
+.headline-today { font-size: 14px; color: #444; }
+.headline-condition { font-size: 15px; font-weight: 500; margin-top: 4px; }
+
+/* Generic slim tiles/text */
+.weather-card { text-align:center; font-size:13px; padding:4px; }
+.weather-time { font-weight:600; margin: 2px 0 4px 0; text-align:center; }
+.weather-condition { font-size:14px; }
+.weather-temp { font-size:13px; }
+.weather-rain { font-size:12px; color:#555; }
+
+/* Subtle card look */
+.card { border:1px solid #ddd; border-radius:8px; padding:6px; }
+.card + .card { margin-top:4px; }
+.badge { font-size:10px; color:#888; text-transform:uppercase; letter-spacing:.3px; text-align:center; margin-bottom:2px; }
+
 /* NEW: horizontal scroller for hourly tiles */
 .hscroll {
   overflow-x: auto;
@@ -22,19 +40,21 @@ st.markdown("""
   padding-bottom: 6px;
   margin: 6px 0 2px 0;
   border-bottom: 1px solid #eee;
+  scroll-snap-type: x proximity; /* nice optional snap feel */
 }
 
 /* A single slim hour tile */
 .hour-tile {
   display: inline-block;
   vertical-align: top;
-  width: 88px;             /* <-- make thinner/wider by changing this */
+  width: 84px;            /* tweak thinner/wider here */
   box-sizing: border-box;
   margin-right: 6px;
   padding: 6px 6px 8px 6px;
   border: 1px solid #ddd;
   border-radius: 8px;
   background: #fff;
+  scroll-snap-align: start;
 }
 
 /* Mini stacks inside a tile */
@@ -43,7 +63,7 @@ st.markdown("""
 .hour-temp  { text-align:center; font-size:12px; }
 .hour-rain  { text-align:center; font-size:11px; color:#555; }
 
-/* In side-by-side: two compact cards stacked */
+/* In side-by-side: two compact stacks */
 .hour-half {
   border-top: 1px dashed #eee;
   margin-top: 6px;
@@ -52,7 +72,6 @@ st.markdown("""
 .hour-badge { font-size:10px; color:#888; text-transform:uppercase; letter-spacing:.3px; text-align:center; margin-bottom:2px; }
 </style>
 """, unsafe_allow_html=True)
-
 
 # =========================
 # Weather mapping
@@ -387,7 +406,7 @@ def render_hourly_ios(hours_df):
         rain_src = r.get("Chance of rain Source") or "—"
 
         tiles.append(f"""
-          <div class="hour-tile" title="Condition: {cond_src}\nTemp: {temp_src}\nRain: {rain_src}">
+          <div class="hour-tile" title="Condition: {cond_src}&#10;Temp: {temp_src}&#10;Rain: {rain_src}">
             <div class="hour-time">{t}</div>
             <div class="hour-cond">{emoji} {cond}</div>
             <div class="hour-temp">{temp}</div>
@@ -397,7 +416,6 @@ def render_hourly_ios(hours_df):
     html = f"""<div class="hscroll">{''.join(tiles)}</div>"""
     st.markdown(html, unsafe_allow_html=True)
 
-
 def render_hourly_stacked_side_by_side(hourly_ss):
     """Side-by-side mode: for each hour, two mini stacks (Optimistic top, Pessimistic bottom) in a horizontal scroller."""
     if hourly_ss.empty:
@@ -406,7 +424,7 @@ def render_hourly_stacked_side_by_side(hourly_ss):
     for _, row in hourly_ss.sort_values("Time").iterrows():
         t = pd.to_datetime(row["Time"]).strftime("%H:%M")
 
-        # Optimistic values
+        # Optimistic
         o_cond = row.get("Optimistic Condition") or "—"
         o_emoji = emoji_for(o_cond)
         o_temp = "—" if pd.isna(row.get("Optimistic Temp")) else f"{round(row['Optimistic Temp'])}°"
@@ -415,7 +433,7 @@ def render_hourly_stacked_side_by_side(hourly_ss):
         o_temp_src = row.get("Optimistic Temp Source") or "—"
         o_rain_src = row.get("Optimistic Chance of rain Source") or "—"
 
-        # Pessimistic values
+        # Pessimistic
         p_cond = row.get("Pessimistic Condition") or "—"
         p_emoji = emoji_for(p_cond)
         p_temp = "—" if pd.isna(row.get("Pessimistic Temp")) else f"{round(row['Pessimistic Temp'])}°"
@@ -425,7 +443,7 @@ def render_hourly_stacked_side_by_side(hourly_ss):
         p_rain_src = row.get("Pessimistic Chance of rain Source") or "—"
 
         tiles.append(f"""
-          <div class="hour-tile" title="Opt: Cond {o_cond_src}, Temp {o_temp_src}, Rain {o_rain_src}\nPes: Cond {p_cond_src}, Temp {p_temp_src}, Rain {p_rain_src}">
+          <div class="hour-tile" title="Opt: Cond {o_cond_src}, Temp {o_temp_src}, Rain {o_rain_src}&#10;Pes: Cond {p_cond_src}, Temp {p_temp_src}, Rain {p_rain_src}">
             <div class="hour-time">{t}</div>
 
             <div class="hour-badge">Optimistic</div>
@@ -443,7 +461,6 @@ def render_hourly_stacked_side_by_side(hourly_ss):
         """)
     html = f"""<div class="hscroll">{''.join(tiles)}</div>"""
     st.markdown(html, unsafe_allow_html=True)
-
 
 def render_daily_ios(daily_df):
     """Single-mode daily: vertical list with Day (dd/mm), Condition, ↑High/↓Low, Rain. Tooltips show sources."""
@@ -524,9 +541,13 @@ if st.button("Get forecast", type="primary"):
 
     if mode in ["Optimistic", "Pessimistic"]:
         daily_mode = daily_for_mode(mode)
+        # Headline
+        if not daily_mode.empty:
+            # render headline requires the high/low fields which are present
+            st.markdown("", unsafe_allow_html=True)
         render_headline(city, daily_mode)
 
-        # Hourly (single mode) — slim tiles
+        # Hourly — slim scroll strip
         st.markdown("### Hourly — Today")
         hours = hourly_for_mode(mode)
         if not hours.empty:
@@ -534,7 +555,7 @@ if st.button("Get forecast", type="primary"):
         else:
             st.info("No hourly data for today.")
 
-        # Daily (single mode) — vertical list with ↑/↓
+        # Daily — vertical list
         st.markdown("### Daily — Next 7 Days")
         if not daily_mode.empty:
             render_daily_ios(daily_mode)
@@ -548,7 +569,7 @@ if st.button("Get forecast", type="primary"):
 
         render_headline_side_by_side(city, daily_opt, daily_pes)
 
-        # Hourly — stacked opt/pes with tooltips
+        # Hourly — stacked opt/pes scroll strip
         st.markdown("### Hourly — Today (Optimistic over Pessimistic)")
         hourly_ss = side_by_side(hourly_today, is_hourly=True)
         if not hourly_ss.empty:
@@ -559,7 +580,6 @@ if st.button("Get forecast", type="primary"):
         # Daily — two compact cards per day
         st.markdown("### Daily — Next 7 Days")
         if not daily_opt.empty or not daily_pes.empty:
-            # align by calendar date
             opt_idx = daily_opt.set_index("Date") if not daily_opt.empty else pd.DataFrame().set_index(pd.Index([]))
             pes_idx = daily_pes.set_index("Date") if not daily_pes.empty else pd.DataFrame().set_index(pd.Index([]))
             all_dates = sorted(set(opt_idx.index).union(set(pes_idx.index)))[:8]
@@ -569,7 +589,6 @@ if st.button("Get forecast", type="primary"):
                 st.markdown(f"**{day} ({date_str})**")
                 colL, colR = st.columns(2)
 
-                # Optimistic card
                 with colL:
                     if d in opt_idx.index:
                         r = opt_idx.loc[d]
@@ -593,7 +612,6 @@ if st.button("Get forecast", type="primary"):
                             """, unsafe_allow_html=True
                         )
 
-                # Pessimistic card
                 with colR:
                     if d in pes_idx.index:
                         r = pes_idx.loc[d]
