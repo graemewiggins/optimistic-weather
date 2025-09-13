@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import pandas as pd
 import requests
 import streamlit as st
+import altair as alt
+
 
 st.set_page_config(page_title="Optimistic Weather", page_icon="🌤️", layout="wide")
 
@@ -452,7 +454,6 @@ def render_hourly_ios(hours_df):
 
 
 def render_hourly_stacked_side_by_side(hourly_ss):
-    import altair as alt
     
     def render_hourly_temp_chart(hourly_ss: pd.DataFrame):
         """Line chart of hourly optimistic vs pessimistic temps."""
