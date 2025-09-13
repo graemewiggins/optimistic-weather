@@ -269,36 +269,65 @@ def independent_metric_picks(df: pd.DataFrame, mode: str, is_hourly: bool):
                 temp_val = low_val
                 temp_src = low_src
 
-            # --- Rain (DAILY) — robust to fake zeros ---
+            # --- Rain (DAILY) — robust to fake zeros and missing values ---
             pp = g[["precip_prob_min", "precip_prob_max", "source"]].copy()
             
             # Keep rows where either min or max exists
-            pp = pp[(pp["precip_prob_min"].notna()) | (pp["precip_prob_max"].notna())]
+            pp = pp[(pp["precip_prob_min"].notna()) | (pp["precip_prob_max"].notna())].copy()
             
-            # Treat "fake zeros" as missing: min==0 while max is NaN often means 'no data'
-            fake_zero_mask = (pp["precip_prob_min"].notna()) & (pp["precip_prob_min"] == 0) & (pp["precip_prob_max"].isna())
-            pp.loc[fake_zero_mask, "precip_prob_min"] = pd.NA  # ignore those zeros
+            # Determine if any provider indicates a non-zero rain chance for this day
+            any_nonzero = ((pp["precip_prob_min"].fillna(0) > 0) | (pp["precip_prob_max"].fillna(0) > 0)).any()
+            
+            # Treat "0/0" pairs as suspect only if someone else shows non-zero
+            suspect_zero = (
+                pp["precip_prob_min"].fillna(0).eq(0) &
+                pp["precip_prob_max"].fillna(0).eq(0)
+            )
+            if any_nonzero:
+                pp.loc[suspect_zero, ["precip_prob_min", "precip_prob_max"]] = pd.NA
             
             pp_row = None
             pp_val = None
             pp_src = None
             
             if mode == "Optimistic":
-                # Driest possible: choose the LOWEST available daily MIN chance of rain
+                # Driest possible: choose the LOWEST available daily MIN chance of rain.
                 cand = pp[pp["precip_prob_min"].notna()]
                 if not cand.empty:
                     idx = cand["precip_prob_min"].idxmin()
-                    pp_row = g.loc[idx]
-                    pp_val = pp_row.get("precip_prob_min")
-                    pp_src = nice_source_name(pp_row.get("source"))
+                    row = g.loc[idx]
+                    pp_row = row
+                    pp_val = row.get("precip_prob_min")
+                    pp_src = nice_source_name(row.get("source"))
+                else:
+                    # Fallback: if no mins at all, use the LOWEST available MAX as a proxy
+                    cand2 = pp[pp["precip_prob_max"].notna()]
+                    if not cand2.empty:
+                        idx = cand2["precip_prob_max"].idxmin()
+                        row = g.loc[idx]
+                        pp_row = row
+                        pp_val = row.get("precip_prob_max")
+                        pp_src = nice_source_name(row.get("source"))
+            
             elif mode == "Pessimistic":
-                # Wettest possible: choose the HIGHEST available daily MAX chance of rain
+                # Wettest possible: choose the HIGHEST available daily MAX chance of rain.
                 cand = pp[pp["precip_prob_max"].notna()]
                 if not cand.empty:
                     idx = cand["precip_prob_max"].idxmax()
-                    pp_row = g.loc[idx]
-                    pp_val = pp_row.get("precip_prob_max")
-                    pp_src = nice_source_name(pp_row.get("source"))
+                    row = g.loc[idx]
+                    pp_row = row
+                    pp_val = row.get("precip_prob_max")
+                    pp_src = nice_source_name(row.get("source"))
+                else:
+                    # Fallback: if no maxes at all, use the HIGHEST available MIN as a proxy
+                    cand2 = pp[pp["precip_prob_min"].notna()]
+                    if not cand2.empty:
+                        idx = cand2["precip_prob_min"].idxmax()
+                        row = g.loc[idx]
+                        pp_row = row
+                        pp_val = row.get("precip_prob_min")
+                        pp_src = nice_source_name(row.get("source"))
+
 
 
 
