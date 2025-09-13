@@ -390,8 +390,10 @@ def render_headline_side_by_side(city, daily_opt, daily_pes):
                 """, unsafe_allow_html=True
             )
 
+
+
 def render_hourly_ios(hours_df):
-    """Single-mode hourly: slim tiles in a horizontal scroll strip."""
+    """Single-mode hourly: slim tiles in a horizontal scroll strip (no leading spaces)."""
     if hours_df.empty:
         return
     tiles = []
@@ -405,19 +407,21 @@ def render_hourly_ios(hours_df):
         temp_src = r.get("Temp Source") or "—"
         rain_src = r.get("Chance of rain Source") or "—"
 
-        tiles.append(f"""
-          <div class="hour-tile" title="Condition: {cond_src}&#10;Temp: {temp_src}&#10;Rain: {rain_src}">
-            <div class="hour-time">{t}</div>
-            <div class="hour-cond">{emoji} {cond}</div>
-            <div class="hour-temp">{temp}</div>
-            <div class="hour-rain">{rain}</div>
-          </div>
-        """)
-    html = f"""<div class="hscroll">{''.join(tiles)}</div>"""
+        tiles.append(
+            '<div class="hour-tile" title="Condition: '
+            + f'{cond_src}&#10;Temp: {temp_src}&#10;Rain: {rain_src}">'
+            + f'<div class="hour-time">{t}</div>'
+            + f'<div class="hour-cond">{emoji} {cond}</div>'
+            + f'<div class="hour-temp">{temp}</div>'
+            + f'<div class="hour-rain">{rain}</div>'
+            + '</div>'
+        )
+    html = '<div class="hscroll">' + ''.join(tiles) + '</div>'
     st.markdown(html, unsafe_allow_html=True)
 
+
 def render_hourly_stacked_side_by_side(hourly_ss):
-    """Side-by-side mode: for each hour, two mini stacks (Optimistic top, Pessimistic bottom) in a horizontal scroller."""
+    """Side-by-side: stacked optimistic/pessimistic per hour, horizontally scrollable (no leading spaces)."""
     if hourly_ss.empty:
         return
     tiles = []
@@ -442,25 +446,25 @@ def render_hourly_stacked_side_by_side(hourly_ss):
         p_temp_src = row.get("Pessimistic Temp Source") or "—"
         p_rain_src = row.get("Pessimistic Chance of rain Source") or "—"
 
-        tiles.append(f"""
-          <div class="hour-tile" title="Opt: Cond {o_cond_src}, Temp {o_temp_src}, Rain {o_rain_src}&#10;Pes: Cond {p_cond_src}, Temp {p_temp_src}, Rain {p_rain_src}">
-            <div class="hour-time">{t}</div>
-
-            <div class="hour-badge">Optimistic</div>
-            <div class="hour-cond">{o_emoji} {o_cond}</div>
-            <div class="hour-temp">{o_temp}</div>
-            <div class="hour-rain">{o_rain}</div>
-
-            <div class="hour-half">
-              <div class="hour-badge">Pessimistic</div>
-              <div class="hour-cond">{p_emoji} {p_cond}</div>
-              <div class="hour-temp">{p_temp}</div>
-              <div class="hour-rain">{p_rain}</div>
-            </div>
-          </div>
-        """)
-    html = f"""<div class="hscroll">{''.join(tiles)}</div>"""
+        tiles.append(
+            '<div class="hour-tile" title="Opt: Cond '
+            + f'{o_cond_src}, Temp {o_temp_src}, Rain {o_rain_src}&#10;Pes: Cond {p_cond_src}, Temp {p_temp_src}, Rain {p_rain_src}">'
+            + f'<div class="hour-time">{t}</div>'
+            + '<div class="hour-badge">Optimistic</div>'
+            + f'<div class="hour-cond">{o_emoji} {o_cond}</div>'
+            + f'<div class="hour-temp">{o_temp}</div>'
+            + f'<div class="hour-rain">{o_rain}</div>'
+            + '<div class="hour-half">'
+            + '<div class="hour-badge">Pessimistic</div>'
+            + f'<div class="hour-cond">{p_emoji} {p_cond}</div>'
+            + f'<div class="hour-temp">{p_temp}</div>'
+            + f'<div class="hour-rain">{p_rain}</div>'
+            + '</div>'
+            + '</div>'
+        )
+    html = '<div class="hscroll">' + ''.join(tiles) + '</div>'
     st.markdown(html, unsafe_allow_html=True)
+
 
 def render_daily_ios(daily_df):
     """Single-mode daily: vertical list with Day (dd/mm), Condition, ↑High/↓Low, Rain. Tooltips show sources."""
