@@ -29,7 +29,6 @@ WEATHER_CODE_MAP = {
 }
 
 def code_to_text(code):
-    """Map numeric weather codes to human-readable text and a rank (lower = nicer)."""
     try:
         if code is None:
             return "Unknown", 99
@@ -42,7 +41,6 @@ def code_to_text(code):
 
 @st.cache_data(show_spinner=False)
 def geocode(query: str):
-    """Return (lat, lon, name, country, timezone) using Open-Meteo geocoding."""
     url = "https://geocoding-api.open-meteo.com/v1/search"
     r = requests.get(url, params={"name": query, "count": 1, "language": "en", "format": "json"}, timeout=15)
     r.raise_for_status()
@@ -52,7 +50,6 @@ def geocode(query: str):
     res = data["results"][0]
     return float(res["latitude"]), float(res["longitude"]), res.get("name", query), res.get("country", ""), res.get("timezone", "UTC")
 
-# Candidate weather models available via Open-Meteo.
 CANDIDATE_MODELS = [
     "gfs_seamless",
     "icon_seamless",
@@ -63,6 +60,18 @@ CANDIDATE_MODELS = [
     "ukmo_seamless",
 ]
 
+def nice_source_name(s: str) -> str:
+    mapping = {
+        "gfs_seamless": "GFS (NOAA)",
+        "icon_seamless": "ICON (DWD)",
+        "ecmwf_ifs04": "ECMWF IFS 0.4°",
+        "meteofrance_seamless": "Météo-France",
+        "gem_global": "GEM (Canada)",
+        "jma_seamless": "JMA",
+        "ukmo_seamless": "UKMO (Met Office)",
+    }
+    return mapping.get(s, s)
+
 @st.cache_data(show_spinner=False)
 def fetch_openmeteo(lat, lon, tz, models):
     base = "https://api.open-meteo.com/v1/forecast"
@@ -70,7 +79,13 @@ def fetch_openmeteo(lat, lon, tz, models):
         "latitude": lat,
         "longitude": lon,
         "hourly": ["temperature_2m", "precipitation_probability", "weathercode"],
-        "daily": ["weathercode", "precipitation_probability_max", "temperature_2m_max", "temperature_2m_min"],
+        "daily": [
+            "weathercode",
+            "precipitation_probability_max",
+            "precipitation_probability_min",
+            "temperature_2m_max",
+            "temperature_2m_min",
+        ],
         "timezone": tz,
         "forecast_days": 8,
     }
@@ -87,7 +102,6 @@ def fetch_openmeteo(lat, lon, tz, models):
         except Exception:
             continue
 
-        # Hourly
         hh = dd.get("hourly", {})
         if hh and "time" in hh:
             hdf = pd.DataFrame({
@@ -102,7 +116,6 @@ def fetch_openmeteo(lat, lon, tz, models):
             hdf = hdf[hdf["date"] == today_str].drop(columns=["date"])
             hourly_frames.append(hdf)
 
-        # Daily
         ddaily = dd.get("daily", {})
         if ddaily and ddaily.get("time"):
             dti = pd.to_datetime(ddaily["time"])
@@ -110,6 +123,7 @@ def fetch_openmeteo(lat, lon, tz, models):
                 "date": dti.date,
                 "wcode_day": ddaily.get("weathercode"),
                 "precip_prob_max": ddaily.get("precipitation_probability_max"),
+                "precip_prob_min": ddaily.get("precipitation_probability_min"),
                 "tmax_c": ddaily.get("temperature_2m_max"),
                 "tmin_c": ddaily.get("temperature_2m_min"),
             })
@@ -123,7 +137,7 @@ def fetch_openmeteo(lat, lon, tz, models):
     )
 
 def independent_metric_picks(df: pd.DataFrame, mode: str, is_hourly: bool):
-    """Select independent best/worst per metric."""
+    """Return per-metric values and their sources for each time/date."""
     if df.empty:
         return pd.DataFrame()
 
@@ -133,66 +147,81 @@ def independent_metric_picks(df: pd.DataFrame, mode: str, is_hourly: bool):
     for k, g in df.groupby(key):
         g = g.copy()
         if is_hourly:
-            # temp
+            # Temp
             if mode == "Optimistic":
                 temp_row = g.loc[g["temperature_c"].idxmax()] if g["temperature_c"].notna().any() else None
             else:
                 temp_row = g.loc[g["temperature_c"].idxmin()] if g["temperature_c"].notna().any() else None
-            # precip
+            # Rain
             if mode == "Optimistic":
                 pp_row = g.loc[g["precip_prob"].fillna(9999).idxmin()] if g["precip_prob"].notna().any() else None
             else:
                 pp_row = g.loc[g["precip_prob"].fillna(-1).idxmax()] if g["precip_prob"].notna().any() else None
-            # condition
+            # Condition
             g["wc_rank"] = g["weathercode"].apply(lambda x: code_to_text(x)[1] if pd.notna(x) else 99)
             cond_row = g.loc[g["wc_rank"].idxmin()] if mode == "Optimistic" else g.loc[g["wc_rank"].idxmax()]
 
             rows.append({
                 "Time": k,
                 "Temp (°C)": None if temp_row is None else temp_row.get("temperature_c"),
+                "Temp Source": None if temp_row is None else nice_source_name(temp_row.get("source")),
                 "Chance of rain (%)": None if pp_row is None else pp_row.get("precip_prob"),
+                "Chance of rain Source": None if pp_row is None else nice_source_name(pp_row.get("source")),
                 "Condition": None if cond_row is None else code_to_text(cond_row.get("weathercode", None))[0],
+                "Condition Source": None if cond_row is None else nice_source_name(cond_row.get("source")),
             })
+
         else:
-            # temp
+            # Temp
             if mode == "Optimistic":
                 temp_row = g.loc[g["tmax_c"].idxmax()] if g["tmax_c"].notna().any() else None
                 temp_val = None if temp_row is None else temp_row.get("tmax_c")
             else:
                 temp_row = g.loc[g["tmin_c"].idxmin()] if g["tmin_c"].notna().any() else None
                 temp_val = None if temp_row is None else temp_row.get("tmin_c")
-            # precip
+            # Rain
             if mode == "Optimistic":
-                pp_row = g.loc[g["precip_prob_max"].fillna(9999).idxmin()] if g["precip_prob_max"].notna().any() else None
-            else:
                 pp_row = g.loc[g["precip_prob_max"].fillna(-1).idxmax()] if g["precip_prob_max"].notna().any() else None
-            # condition
+                pp_val = None if pp_row is None else pp_row.get("precip_prob_max")
+            else:
+                pp_row = g.loc[g["precip_prob_min"].fillna(9999).idxmin()] if g["precip_prob_min"].notna().any() else None
+                pp_val = None if pp_row is None else pp_row.get("precip_prob_min")
+            # Condition
             g["wc_rank"] = g["wcode_day"].apply(lambda x: code_to_text(x)[1] if pd.notna(x) else 99)
             cond_row = g.loc[g["wc_rank"].idxmin()] if mode == "Optimistic" else g.loc[g["wc_rank"].idxmax()]
+            cond_val = None if cond_row is None else code_to_text(cond_row.get("wcode_day", None))[0]
 
             rows.append({
                 "Date": k,
                 "Temp (°C)": temp_val,
-                "Chance of rain (%)": None if pp_row is None else pp_row.get("precip_prob_max"),
-                "Condition": None if cond_row is None else code_to_text(cond_row.get("wcode_day", None))[0],
+                "Temp Source": None if temp_row is None else nice_source_name(temp_row.get("source")),
+                "Chance of rain (%)": pp_val,
+                "Chance of rain Source": None if pp_row is None else nice_source_name(pp_row.get("source")),
+                "Condition": cond_val,
+                "Condition Source": None if cond_row is None else nice_source_name(cond_row.get("source")),
             })
 
     return pd.DataFrame(rows)
 
 def side_by_side(df: pd.DataFrame, is_hourly: bool):
-    """Produce side-by-side optimistic vs pessimistic table."""
     opt = independent_metric_picks(df, "Optimistic", is_hourly)
     pes = independent_metric_picks(df, "Pessimistic", is_hourly)
     key = "Time" if is_hourly else "Date"
     merged = opt.merge(pes, on=key, suffixes=(" (Optimistic)", " (Pessimistic)"))
-    # rename columns
+    # rename nicely
     merged = merged.rename(columns={
         "Temp (°C) (Optimistic)": "Optimistic Temp",
         "Temp (°C) (Pessimistic)": "Pessimistic Temp",
+        "Temp Source (Optimistic)": "Optimistic Temp Source",
+        "Temp Source (Pessimistic)": "Pessimistic Temp Source",
         "Chance of rain (%) (Optimistic)": "Optimistic Chance of rain",
         "Chance of rain (%) (Pessimistic)": "Pessimistic Chance of rain",
+        "Chance of rain Source (Optimistic)": "Optimistic Chance of rain Source",
+        "Chance of rain Source (Pessimistic)": "Pessimistic Chance of rain Source",
         "Condition (Optimistic)": "Optimistic Condition",
         "Condition (Pessimistic)": "Pessimistic Condition",
+        "Condition Source (Optimistic)": "Optimistic Condition Source",
+        "Condition Source (Pessimistic)": "Pessimistic Condition Source",
     })
     return merged
 
@@ -235,33 +264,29 @@ if st.button("Get forecast", type="primary"):
         st.warning("No data returned. Try fewer/different models or another location.")
         st.stop()
 
-    # ---------------------------
     # Hourly
-    # ---------------------------
     st.subheader("Hourly — Today")
     if not hourly_all.empty:
         if mode in ["Optimistic", "Pessimistic"]:
-            hourly_ind = independent_metric_picks(hourly_all, mode=mode, is_hourly=True)
-            st.dataframe(hourly_ind.sort_values("Time"), use_container_width=True, hide_index=True)
+            hourly_ind = independent_metric_picks(hourly_all, mode=mode, is_hourly=True).sort_values("Time")
+            st.dataframe(hourly_ind, use_container_width=True, hide_index=True)
         else:
-            hourly_ss = side_by_side(hourly_all, is_hourly=True)
-            st.dataframe(hourly_ss.sort_values("Time"), use_container_width=True, hide_index=True)
+            hourly_ss = side_by_side(hourly_all, is_hourly=True).sort_values("Time")
+            st.dataframe(hourly_ss, use_container_width=True, hide_index=True)
     else:
         st.info("No hourly data for today returned.")
 
-    # ---------------------------
     # Daily
-    # ---------------------------
     st.subheader("Daily — Next 7 Days")
     if not daily_all.empty:
         today = datetime.now().date()
         daily_all_future = daily_all[daily_all["date"] >= today]
         if mode in ["Optimistic", "Pessimistic"]:
-            daily_ind = independent_metric_picks(daily_all_future, mode=mode, is_hourly=False)
-            st.dataframe(daily_ind.sort_values("Date").head(8), use_container_width=True, hide_index=True)
+            daily_ind = independent_metric_picks(daily_all_future, mode=mode, is_hourly=False).sort_values("Date").head(8)
+            st.dataframe(daily_ind, use_container_width=True, hide_index=True)
         else:
-            daily_ss = side_by_side(daily_all_future, is_hourly=False)
-            st.dataframe(daily_ss.sort_values("Date").head(8), use_container_width=True, hide_index=True)
+            daily_ss = side_by_side(daily_all_future, is_hourly=False).sort_values("Date").head(8)
+            st.dataframe(daily_ss, use_container_width=True, hide_index=True)
     else:
         st.info("No daily data returned.")
 
