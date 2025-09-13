@@ -269,15 +269,33 @@ def independent_metric_picks(df: pd.DataFrame, mode: str, is_hourly: bool):
                 temp_val = low_val
                 temp_src = low_src
 
-            # Rain
-            if mode == "Optimistic":
-                pp_row = g.loc[g["precip_prob_max"].fillna(-1).idxmax()] if g["precip_prob_max"].notna().any() else None
-                pp_val = None if pp_row is None else pp_row.get("precip_prob_max")
-                pp_src = None if pp_row is None else nice_source_name(pp_row.get("source"))
-            else:
-                pp_row = g.loc[g["precip_prob_min"].fillna(9999).idxmin()] if g["precip_prob_min"].notna().any() else None
-                pp_val = None if pp_row is None else pp_row.get("precip_prob_min")
-                pp_src = None if pp_row is None else nice_source_name(pp_row.get("source"))
+# Rain (DAILY) — driest vs wettest, with robust NaN handling
+pp_max_series = g["precip_prob_max"]
+pp_min_series = g["precip_prob_min"]
+
+# Build candidates ignoring NaNs
+pp_max_valid = g.loc[pp_max_series.notna(), ["precip_prob_max", "source"]]
+pp_min_valid = g.loc[pp_min_series.notna(), ["precip_prob_min", "source"]]
+
+pp_row = None
+pp_val = None
+pp_src = None
+
+if mode == "Optimistic":
+    # Driest possible: choose the LOWEST available daily MIN chance of rain
+    if not pp_min_valid.empty:
+        idx = pp_min_series.idxmin()
+        pp_row = g.loc[idx]
+        pp_val = pp_row.get("precip_prob_min")
+        pp_src = nice_source_name(pp_row.get("source"))
+elif mode == "Pessimistic":
+    # Wettest possible: choose the HIGHEST available daily MAX chance of rain
+    if not pp_max_valid.empty:
+        idx = pp_max_series.idxmax()
+        pp_row = g.loc[idx]
+        pp_val = pp_row.get("precip_prob_max")
+        pp_src = nice_source_name(pp_row.get("source"))
+
 
             # Condition — ignore Unknown
             g["wc_text"] = g["wcode_day"].apply(lambda x: code_to_text(x)[0])
