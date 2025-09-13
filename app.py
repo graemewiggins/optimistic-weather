@@ -619,11 +619,15 @@ def render_hourly_temp_chart(hourly_ss: pd.DataFrame):
             alt.Chart(df_plot)
             .mark_line(point=True)
             .encode(
-                x=alt.X("Time:T", title="Hour"),
-                y=alt.Y("Temp (°C):Q", title="Temperature (°C)"),
-                color=alt.Color("Scenario:N", scale=alt.Scale(scheme="set1")),
-                tooltip=["Time", "Scenario", "Temp (°C)"]
-            )
+            x=alt.X("Time:T", title="Hour"),
+            y=alt.Y(
+                "Temp (°C):Q",
+                title="Temperature (°C)",
+                scale=alt.Scale(zero=False)  # <-- key line: don't force baseline at 0
+            ),
+            color=alt.Color("Scenario:N", title="", sort=["Optimistic Temp","Pessimistic Temp"]),
+            tooltip=["Time:T", "Scenario:N", alt.Tooltip("Temp (°C):Q", format=".1f")]
+        )
             .properties(height=300)
             .interactive()
         )
