@@ -1,16 +1,42 @@
 # app.py
-import streamlit as st
-import requests
-import pandas as pd
-from datetime import datetime, timezone
 import math
+from datetime import datetime, timezone
+
+import pandas as pd
+import requests
+import streamlit as st
 
 st.set_page_config(page_title="Optimistic Weather", page_icon="🌤️", layout="wide")
 
-# ---------------------------
-# Helpers & mapping
-# ---------------------------
+# =========================
+# CSS — slim, iOS-style
+# =========================
+st.markdown("""
+<style>
+/* Headline */
+.headline { text-align:center; padding: 6px; margin-bottom: 12px; }
+.headline-city { font-size: 20px; font-weight: 600; margin-bottom: 2px; }
+.headline-today { font-size: 14px; color: #444; }
+.headline-condition { font-size: 15px; font-weight: 500; margin-top: 4px; }
 
+/* Tiles & text */
+.weather-card { text-align:center; font-size:13px; padding:4px; }
+.weather-time { font-weight:600; margin: 2px 0 4px 0; text-align:center; }
+.weather-condition { font-size:14px; }
+.weather-temp { font-size:13px; }
+.weather-rain { font-size:12px; color:#555; }
+
+/* Subtle cards */
+.card { border:1px solid #ddd; border-radius:8px; padding:6px; }
+.card + .card { margin-top:4px; }
+.badge { font-size:11px; color:#999; }
+.row { display:block; margin-bottom:4px; }
+</style>
+""", unsafe_allow_html=True)
+
+# =========================
+# Weather mapping
+# =========================
 WEATHER_CODE_MAP = {
     0: ("Clear sky", 0), 1: ("Mainly clear", 1), 2: ("Partly cloudy", 2), 3: ("Overcast", 3),
     45: ("Fog", 4), 48: ("Depositing rime fog", 5),
@@ -28,11 +54,12 @@ EMOJI_FOR_TEXT = {
     "Clear sky": "☀️", "Mainly clear": "🌤️", "Partly cloudy": "⛅", "Overcast": "☁️",
     "Fog": "🌫️", "Light drizzle": "🌦️", "Moderate drizzle": "🌦️", "Dense drizzle": "🌧️",
     "Slight rain": "🌧️", "Moderate rain": "🌧️", "Heavy rain": "🌧️",
-    "Slight snow": "🌨️", "Moderate snow": "🌨️", "Heavy snow": "❄️",
+    "Snow grains": "🌨️", "Slight snow": "🌨️", "Moderate snow": "🌨️", "Heavy snow": "❄️",
     "Thunderstorm": "⛈️", "Thunderstorm with slight hail": "⛈️", "Thunderstorm with heavy hail": "⛈️",
 }
 
 def code_to_text(code):
+    """Return (label, niceness_rank) — robust to None/NaN/strings."""
     try:
         if code is None:
             return "Unknown", 99
@@ -54,9 +81,13 @@ def nice_source_name(s: str) -> str:
     }
     return mapping.get(s, s)
 
-# ---------------------------
+# =========================
 # Data fetch
-# ---------------------------
+# =========================
+CANDIDATE_MODELS = [
+    "gfs_seamless", "icon_seamless", "ecmwf_ifs04", "meteofrance_seamless",
+    "gem_global", "jma_seamless", "ukmo_seamless",
+]
 
 @st.cache_data(show_spinner=False)
 def geocode(query: str):
@@ -69,30 +100,34 @@ def geocode(query: str):
     res = data["results"][0]
     return float(res["latitude"]), float(res["longitude"]), res.get("name", query), res.get("country", ""), res.get("timezone", "UTC")
 
-CANDIDATE_MODELS = [
-    "gfs_seamless", "icon_seamless", "ecmwf_ifs04", "meteofrance_seamless", "gem_global", "jma_seamless", "ukmo_seamless",
-]
-
 @st.cache_data(show_spinner=False)
 def fetch_openmeteo(lat, lon, tz, models):
     base = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat, "longitude": lon, "timezone": tz, "forecast_days": 8,
         "hourly": ["temperature_2m", "precipitation_probability", "weathercode"],
-        "daily": ["weathercode", "precipitation_probability_max", "precipitation_probability_min",
-                  "temperature_2m_max", "temperature_2m_min"],
+        "daily": [
+            "weathercode",
+            "precipitation_probability_max",  # for optimistic daily rain
+            "precipitation_probability_min",  # for pessimistic daily rain
+            "temperature_2m_max",            # for optimistic daily temp
+            "temperature_2m_min",            # for pessimistic daily temp
+        ],
     }
     hourly_frames, daily_frames = [], []
+
     for m in models:
         p = dict(params); p["models"] = m
         try:
-            rr = requests.get(base, params=p, timeout=20); rr.raise_for_status(); dd = rr.json()
+            rr = requests.get(base, params=p, timeout=20)
+            rr.raise_for_status()
+            dd = rr.json()
         except Exception:
             continue
 
         hh = dd.get("hourly", {})
         if hh and "time" in hh:
-            hdf = pd.DataFrame({
+            h = pd.DataFrame({
                 "time": pd.to_datetime(hh["time"]),
                 "temperature_c": hh.get("temperature_2m"),
                 "precip_prob": hh.get("precipitation_probability"),
@@ -100,14 +135,14 @@ def fetch_openmeteo(lat, lon, tz, models):
                 "source": m,
             })
             today_str = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
-            hdf["date"] = hdf["time"].dt.strftime("%Y-%m-%d")
-            hdf = hdf[hdf["date"] == today_str].drop(columns=["date"])
-            hourly_frames.append(hdf)
+            h["date"] = h["time"].dt.strftime("%Y-%m-%d")
+            h = h[h["date"] == today_str].drop(columns=["date"])
+            hourly_frames.append(h)
 
         ddaily = dd.get("daily", {})
         if ddaily and ddaily.get("time"):
             dti = pd.to_datetime(ddaily["time"])
-            ddf = pd.DataFrame({
+            d = pd.DataFrame({
                 "date": dti.date,
                 "wcode_day": ddaily.get("weathercode"),
                 "precip_prob_max": ddaily.get("precipitation_probability_max"),
@@ -116,89 +151,127 @@ def fetch_openmeteo(lat, lon, tz, models):
                 "tmin_c": ddaily.get("temperature_2m_min"),
                 "source": m,
             }).iloc[:8]
-            daily_frames.append(ddf)
+            daily_frames.append(d)
 
     hourly_all = pd.concat(hourly_frames, ignore_index=True) if hourly_frames else pd.DataFrame()
-    daily_all  = pd.concat(daily_frames, ignore_index=True) if daily_frames else pd.DataFrame()
+    daily_all  = pd.concat(daily_frames,  ignore_index=True) if daily_frames  else pd.DataFrame()
     return hourly_all, daily_all
 
-# ---------------------------
-# Picking logic (with Unknown filtered for condition)
-# ---------------------------
-
+# =========================
+# Picking logic
+# =========================
 def independent_metric_picks(df: pd.DataFrame, mode: str, is_hourly: bool):
-    if df.empty: return pd.DataFrame()
+    """
+    Return per-metric values and their sources for each time/date.
+    - Hourly Temp: max/min temperature
+    - Hourly Rain: min/max precip_prob
+    - Daily Temp: Optimistic=highest tmax, Pessimistic=lowest tmin (and we also compute ↑High/↓Low every time)
+    - Daily Rain: Optimistic=highest precip_prob_max, Pessimistic=lowest precip_prob_min
+    - Condition: best/worst rank, ignoring 'Unknown'
+    """
+    if df.empty:
+        return pd.DataFrame()
+
     key = "time" if is_hourly else "date"
-    rows = []
+    out = []
+
     for k, g in df.groupby(key):
         g = g.copy()
+
         if is_hourly:
-            # temp
-            temp_row = (g.loc[g["temperature_c"].idxmax()] if mode=="Optimistic"
-                        else g.loc[g["temperature_c"].idxmin()]) if g["temperature_c"].notna().any() else None
-            # rain
-            pp_series = g["precip_prob"]
-            if mode == "Optimistic":
-                pp_row = g.loc[pp_series.fillna(9999).idxmin()] if pp_series.notna().any() else None
-            else:
-                pp_row = g.loc[pp_series.fillna(-1).idxmax()] if pp_series.notna().any() else None
-            # condition (ignore Unknown)
+            # Temp
+            temp_row = None
+            if g["temperature_c"].notna().any():
+                temp_row = g.loc[g["temperature_c"].idxmax()] if mode == "Optimistic" else g.loc[g["temperature_c"].idxmin()]
+            # Rain
+            pp_row = None
+            if g["precip_prob"].notna().any():
+                series = g["precip_prob"]
+                pp_row = g.loc[series.fillna(9999).idxmin()] if mode == "Optimistic" else g.loc[series.fillna(-1).idxmax()]
+            # Condition — ignore Unknown
             g["wc_text"] = g["weathercode"].apply(lambda x: code_to_text(x)[0])
             g["wc_rank"] = g["weathercode"].apply(lambda x: code_to_text(x)[1])
-            gv = g[g["wc_text"]!="Unknown"]
+            gv = g[g["wc_text"] != "Unknown"]
             if not gv.empty:
-                cond_row = gv.loc[gv["wc_rank"].idxmin()] if mode=="Optimistic" else gv.loc[gv["wc_rank"].idxmax()]
-                cond_val = code_to_text(cond_row.get("weathercode", None))[0]
+                cond_row = gv.loc[gv["wc_rank"].idxmin()] if mode == "Optimistic" else gv.loc[gv["wc_rank"].idxmax()]
+                cond_val = code_to_text(cond_row.get("weathercode"))[0]
                 cond_src = nice_source_name(cond_row.get("source"))
             else:
                 cond_val, cond_src = "Unknown", None
-            rows.append({
+
+            out.append({
                 "Time": k,
                 "Temp (°C)": None if temp_row is None else temp_row.get("temperature_c"),
                 "Temp Source": None if temp_row is None else nice_source_name(temp_row.get("source")),
                 "Chance of rain (%)": None if pp_row is None else pp_row.get("precip_prob"),
                 "Chance of rain Source": None if pp_row is None else nice_source_name(pp_row.get("source")),
-                "Condition": cond_val, "Condition Source": cond_src,
+                "Condition": cond_val,
+                "Condition Source": cond_src,
             })
+
         else:
-            # temp (opt: highest tmax, pes: lowest tmin)
-            if mode=="Optimistic":
-                temp_row = g.loc[g["tmax_c"].idxmax()] if g["tmax_c"].notna().any() else None
-                temp_val = None if temp_row is None else temp_row.get("tmax_c")
+            # === DAILY: compute High/Low and sources (always) ===
+            high_row = g.loc[g["tmax_c"].idxmax()] if g["tmax_c"].notna().any() else None
+            low_row  = g.loc[g["tmin_c"].idxmin()] if g["tmin_c"].notna().any() else None
+            high_val = None if high_row is None else high_row.get("tmax_c")
+            low_val  = None if low_row  is None else low_row.get("tmin_c")
+            high_src = None if high_row is None else nice_source_name(high_row.get("source"))
+            low_src  = None if low_row  is None else nice_source_name(low_row.get("source"))
+
+            # Mode-specific single "Temp (°C)" field (for other tables/headline)
+            if mode == "Optimistic":
+                temp_val = high_val
+                temp_src = high_src
             else:
-                temp_row = g.loc[g["tmin_c"].idxmin()] if g["tmin_c"].notna().any() else None
-                temp_val = None if temp_row is None else temp_row.get("tmin_c")
-            # rain (opt: highest max, pes: lowest min)
-            if mode=="Optimistic":
+                temp_val = low_val
+                temp_src = low_src
+
+            # Rain
+            if mode == "Optimistic":
                 pp_row = g.loc[g["precip_prob_max"].fillna(-1).idxmax()] if g["precip_prob_max"].notna().any() else None
                 pp_val = None if pp_row is None else pp_row.get("precip_prob_max")
+                pp_src = None if pp_row is None else nice_source_name(pp_row.get("source"))
             else:
                 pp_row = g.loc[g["precip_prob_min"].fillna(9999).idxmin()] if g["precip_prob_min"].notna().any() else None
                 pp_val = None if pp_row is None else pp_row.get("precip_prob_min")
-            # condition (ignore Unknown)
+                pp_src = None if pp_row is None else nice_source_name(pp_row.get("source"))
+
+            # Condition — ignore Unknown
             g["wc_text"] = g["wcode_day"].apply(lambda x: code_to_text(x)[0])
             g["wc_rank"] = g["wcode_day"].apply(lambda x: code_to_text(x)[1])
-            gv = g[g["wc_text"]!="Unknown"]
+            gv = g[g["wc_text"] != "Unknown"]
             if not gv.empty:
-                cond_row = gv.loc[gv["wc_rank"].idxmin()] if mode=="Optimistic" else gv.loc[gv["wc_rank"].idxmax()]
-                cond_val = code_to_text(cond_row.get("wcode_day", None))[0]
-                cond_src = nice_source_name(cond_row.get("source"))
+                cond_pick = gv.loc[gv["wc_rank"].idxmin()] if mode == "Optimistic" else gv.loc[gv["wc_rank"].idxmax()]
+                cond_val = code_to_text(cond_pick.get("wcode_day"))[0]
+                cond_src = nice_source_name(cond_pick.get("source"))
             else:
                 cond_val, cond_src = "Unknown", None
-            rows.append({
+
+            out.append({
                 "Date": k,
-                "Temp (°C)": temp_val, "Temp Source": None if temp_row is None else nice_source_name(temp_row.get("source")),
-                "Chance of rain (%)": pp_val, "Chance of rain Source": None if pp_row is None else nice_source_name(pp_row.get("source")),
-                "Condition": cond_val, "Condition Source": cond_src,
+                "Temp (°C)": temp_val,                # mode-specific single temp for that day
+                "Temp Source": temp_src,
+
+                "Chance of rain (%)": pp_val,
+                "Chance of rain Source": pp_src,
+
+                "Condition": cond_val,
+                "Condition Source": cond_src,
+
+                # Always include high/low + sources for UI
+                "High (°C)": high_val,
+                "High Temp Source": high_src,
+                "Low (°C)": low_val,
+                "Low Temp Source": low_src,
             })
-    return pd.DataFrame(rows)
+
+    return pd.DataFrame(out)
 
 def side_by_side(df: pd.DataFrame, is_hourly: bool):
     opt = independent_metric_picks(df, "Optimistic", is_hourly)
     pes = independent_metric_picks(df, "Pessimistic", is_hourly)
     key = "Time" if is_hourly else "Date"
     merged = opt.merge(pes, on=key, suffixes=(" (Optimistic)", " (Pessimistic)"))
-    # flatten names
     return merged.rename(columns={
         "Temp (°C) (Optimistic)": "Optimistic Temp",
         "Temp (°C) (Pessimistic)": "Pessimistic Temp",
@@ -214,12 +287,11 @@ def side_by_side(df: pd.DataFrame, is_hourly: bool):
         "Condition Source (Pessimistic)": "Pessimistic Condition Source",
     })
 
-# ---------------------------
-# UI Pieces (iOS-style headline + lists)
-# ---------------------------
-
+# =========================
+# UI helpers (renderers)
+# =========================
 def render_headline(city, daily_df):
-    """Show today's headline: City, High/Low, Condition, Rain (slimmer iOS-style)."""
+    """Single-mode headline: city, today, emoji/cond, ↑high/↓low, rain."""
     if daily_df.empty:
         return
     today = datetime.now().date()
@@ -227,140 +299,174 @@ def render_headline(city, daily_df):
     if today_rows.empty:
         return
     row = today_rows.iloc[0]
-    cond = row["Condition"] or "—"
+
+    cond = row.get("Condition") or "—"
     emoji = emoji_for(cond)
-    temp = "—" if pd.isna(row["Temp (°C)"]) else f"{round(row['Temp (°C)'])}°"
-    rain = "—" if pd.isna(row["Chance of rain (%)"]) else f"{int(round(row['Chance of rain (%)']))}%"
+
+    hi = "—" if pd.isna(row.get("High (°C)")) else f"{round(row['High (°C)'])}°"
+    lo = "—" if pd.isna(row.get("Low (°C)")) else f"{round(row['Low (°C)'])}°"
+    rain = "—" if pd.isna(row.get("Chance of rain (%)")) else f"{int(round(row['Chance of rain (%)']))}%"
 
     st.markdown(
         f"""
         <div class="headline">
           <div class="headline-city">{city}</div>
           <div class="headline-today">Today</div>
-          <div class="headline-condition">{emoji} {cond} · {temp} · {rain} rain</div>
+          <div class="headline-condition">{emoji} {cond} · ↑ {hi} / ↓ {lo} · {rain} rain</div>
         </div>
         """, unsafe_allow_html=True
     )
- # When in optimistic mode, high is tmax; pessimistic, low is tmin. If both wanted we'd compute separately.
 
 def render_headline_side_by_side(city, daily_opt, daily_pes):
     st.markdown(f"<div class='headline-city'>{city}</div>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
-    with c1:
-        if not daily_opt.empty:
-            r = daily_opt.iloc[0]
-            cond = r["Condition"] or "—"
-            emoji = emoji_for(cond)
-            temp = "—" if pd.isna(r["Temp (°C)"]) else f"{round(r['Temp (°C)'])}°"
-            rain = "—" if pd.isna(r["Chance of rain (%)"]) else f"{int(round(r['Chance of rain (%)']))}%"
+    if not daily_opt.empty:
+        r = daily_opt.iloc[0]
+        cond = r.get("Condition") or "—"; emoji = emoji_for(cond)
+        hi = "—" if pd.isna(r.get("High (°C)")) else f"{round(r['High (°C)'])}°"
+        lo = "—" if pd.isna(r.get("Low (°C)")) else f"{round(r['Low (°C)'])}°"
+        rain = "—" if pd.isna(r.get("Chance of rain (%)")) else f"{int(round(r['Chance of rain (%)']))}%"
+        with c1:
             st.markdown(
                 f"""
-                <div class="headline" style="border:1px solid #ddd; border-radius:8px;">
+                <div class="headline card">
                   <div class="headline-today">Optimistic</div>
-                  <div class="headline-condition">{emoji} {cond} · {temp} · {rain} rain</div>
+                  <div class="headline-condition">{emoji} {cond} · ↑ {hi} / ↓ {lo} · {rain} rain</div>
                 </div>
                 """, unsafe_allow_html=True
             )
-    with c2:
-        if not daily_pes.empty:
-            r = daily_pes.iloc[0]
-            cond = r["Condition"] or "—"
-            emoji = emoji_for(cond)
-            temp = "—" if pd.isna(r["Temp (°C)"]) else f"{round(r['Temp (°C)'])}°"
-            rain = "—" if pd.isna(r["Chance of rain (%)"]) else f"{int(round(r['Chance of rain (%)']))}%"
+    if not daily_pes.empty:
+        r = daily_pes.iloc[0]
+        cond = r.get("Condition") or "—"; emoji = emoji_for(cond)
+        hi = "—" if pd.isna(r.get("High (°C)")) else f"{round(r['High (°C)'])}°"
+        lo = "—" if pd.isna(r.get("Low (°C)")) else f"{round(r['Low (°C)'])}°"
+        rain = "—" if pd.isna(r.get("Chance of rain (%)")) else f"{int(round(r['Chance of rain (%)']))}%"
+        with c2:
             st.markdown(
                 f"""
-                <div class="headline" style="border:1px solid #ddd; border-radius:8px;">
+                <div class="headline card">
                   <div class="headline-today">Pessimistic</div>
-                  <div class="headline-condition">{emoji} {cond} · {temp} · {rain} rain</div>
+                  <div class="headline-condition">{emoji} {cond} · ↑ {hi} / ↓ {lo} · {rain} rain</div>
                 </div>
                 """, unsafe_allow_html=True
             )
 
+def render_hourly_ios(hours_df):
+    """Single-mode hourly: slim tiles across, each column: Condition → Temp → Rain → Time."""
+    if hours_df.empty:
+        return
+    N = 6  # columns per row; tweak for density
+    for i in range(0, len(hours_df), N):
+        cols = st.columns(min(N, len(hours_df) - i))
+        for j, col in enumerate(cols, start=i):
+            if j >= len(hours_df): break
+            r = hours_df.iloc[j]
+            t = pd.to_datetime(r["Time"]).strftime("%H:%M")
+            cond = r.get("Condition") or "—"
+            emoji = emoji_for(cond)
+            temp = "—" if pd.isna(r.get("Temp (°C)")) else f"{round(r['Temp (°C)'])}°"
+            rain = "—" if pd.isna(r.get("Chance of rain (%)")) else f"{int(round(r['Chance of rain (%)']))}%"
+            cond_src = r.get("Condition Source") or "—"
+            temp_src = r.get("Temp Source") or "—"
+            rain_src = r.get("Chance of rain Source") or "—"
 
-def render_daily_vertical(daily_df):
-    """Daily vertical list: Day (dd/mm), Condition, High/Low, Rain."""
-    if daily_df.empty: return
-    for _, r in daily_df.iterrows():
-        date = r["Date"]
-        day = pd.to_datetime(date).strftime("%a")
-        date_str = pd.to_datetime(date).strftime("%-d/%-m")
-        cond = r["Condition"]; emoji = emoji_for(cond)
-        rain = r["Chance of rain (%)"]
-        temp = r["Temp (°C)"]
-        st.markdown(
-            f"{day} ({date_str})  &nbsp;&nbsp; {emoji} **{cond}**  &nbsp;&nbsp; "
-            f"**{temp if temp is not None else '—'}°**  &nbsp;&nbsp; "
-            f"{'' if rain is None else str(int(round(rain)))}%"
-        )
+            col.markdown(f"<div class='weather-time'>{t}</div>", unsafe_allow_html=True)
+            col.markdown(
+                f"""
+                <div class="weather-card">
+                  <div class="weather-condition" title="Condition source: {cond_src}">{emoji} {cond}</div>
+                  <div class="weather-temp" title="Temp source: {temp_src}">{temp}</div>
+                  <div class="weather-rain" title="Rain source: {rain_src}">{rain}</div>
+                </div>
+                """, unsafe_allow_html=True
+            )
 
 def render_hourly_stacked_side_by_side(hourly_ss):
-    """
-    Hourly tiles across the page; each tile shows Optimistic row (top) and Pessimistic row (bottom).
-    Sources are shown as tooltips via the 'help' argument on st.metric.
-    """
-    if hourly_ss.empty: return
+    """Side-by-side mode: per hour, stacked Optimistic (top) & Pessimistic (bottom)."""
+    if hourly_ss.empty:
+        return
     hourly_ss = hourly_ss.sort_values("Time")
-    hours = list(hourly_ss["Time"].unique())
-    # Lay out in rows of N columns for responsiveness
-    N = 4  # columns per row
-    for i in range(0, len(hours), N):
-        cols = st.columns(min(N, len(hours) - i))
+    N = 4
+    for i in range(0, len(hourly_ss), N):
+        cols = st.columns(min(N, len(hourly_ss) - i))
         for j, col in enumerate(cols, start=i):
-            t = hours[j]
-            row = hourly_ss[hourly_ss["Time"] == t].iloc[0]
-            with col:
-                st.markdown(f"<div style='text-align:center; font-weight:600;'>{pd.to_datetime(t).strftime('%H:%M')}</div>", unsafe_allow_html=True)
-                # Optimistic block
-                with st.container(border=True):
-                    st.caption("Optimistic")
-                    st.metric("Condition", f"{emoji_for(row['Optimistic Condition'])} {row['Optimistic Condition'] or '—'}",
-                              help=f"Condition source: {row.get('Optimistic Condition Source') or '—'}")
-                    st.metric("Temp", f"{'—' if pd.isna(row['Optimistic Temp']) else round(row['Optimistic Temp'],1)}°",
-                              help=f"Temp source: {row.get('Optimistic Temp Source') or '—'}")
-                    st.metric("Rain", f"{'—' if pd.isna(row['Optimistic Chance of rain']) else int(round(row['Optimistic Chance of rain']))}%",
-                              help=f"Rain source: {row.get('Optimistic Chance of rain Source') or '—'}")
-                # Pessimistic block
-                with st.container(border=True):
-                    st.caption("Pessimistic")
-                    st.metric("Condition", f"{emoji_for(row['Pessimistic Condition'])} {row['Pessimistic Condition'] or '—'}",
-                              help=f"Condition source: {row.get('Pessimistic Condition Source') or '—'}")
-                    st.metric("Temp", f"{'—' if pd.isna(row['Pessimistic Temp']) else round(row['Pessimistic Temp'],1)}°",
-                              help=f"Temp source: {row.get('Pessimistic Temp Source') or '—'}")
-                    st.metric("Rain", f"{'—' if pd.isna(row['Pessimistic Chance of rain']) else int(round(row['Pessimistic Chance of rain']))}%",
-                              help=f"Rain source: {row.get('Pessimistic Chance of rain Source') or '—'}")
+            if j >= len(hourly_ss): break
+            row = hourly_ss.iloc[j]
+            t = pd.to_datetime(row["Time"]).strftime("%H:%M")
+            col.markdown(f"<div class='weather-time'>{t}</div>", unsafe_allow_html=True)
 
-# ---------------------------
-# Main UI
-# ---------------------------
+            # Optimistic
+            col.markdown(
+                f"""
+                <div class="weather-card card">
+                  <div class="badge">Optimistic</div>
+                  <div class="weather-condition" title="Condition source: {row.get('Optimistic Condition Source') or '—'}">
+                    {emoji_for(row.get('Optimistic Condition') or 'Unknown')} {row.get('Optimistic Condition') or '—'}
+                  </div>
+                  <div class="weather-temp" title="Temp source: {row.get('Optimistic Temp Source') or '—'}">
+                    {'—' if pd.isna(row.get('Optimistic Temp')) else f"{round(row['Optimistic Temp'])}°"}
+                  </div>
+                  <div class="weather-rain" title="Rain source: {row.get('Optimistic Chance of rain Source') or '—'}">
+                    {'—' if pd.isna(row.get('Optimistic Chance of rain')) else f"{int(round(row['Optimistic Chance of rain']))}%"}
+                  </div>
+                </div>
+                """, unsafe_allow_html=True
+            )
 
+            # Pessimistic
+            col.markdown(
+                f"""
+                <div class="weather-card card">
+                  <div class="badge">Pessimistic</div>
+                  <div class="weather-condition" title="Condition source: {row.get('Pessimistic Condition Source') or '—'}">
+                    {emoji_for(row.get('Pessimistic Condition') or 'Unknown')} {row.get('Pessimistic Condition') or '—'}
+                  </div>
+                  <div class="weather-temp" title="Temp source: {row.get('Pessimistic Temp Source') or '—'}">
+                    {'—' if pd.isna(row.get('Pessimistic Temp')) else f"{round(row['Pessimistic Temp'])}°"}
+                  </div>
+                  <div class="weather-rain" title="Rain source: {row.get('Pessimistic Chance of rain Source') or '—'}">
+                    {'—' if pd.isna(row.get('Pessimistic Chance of rain')) else f"{int(round(row['Pessimistic Chance of rain']))}%"}
+                  </div>
+                </div>
+                """, unsafe_allow_html=True
+            )
+
+def render_daily_ios(daily_df):
+    """Single-mode daily: vertical list with Day (dd/mm), Condition, ↑High/↓Low, Rain. Tooltips show sources."""
+    if daily_df.empty:
+        return
+    for _, r in daily_df.iterrows():
+        date = pd.to_datetime(r["Date"])
+        day = date.strftime("%a")
+        # Linux-friendly day/month (no leading zeros); adjust if needed
+        date_str = date.strftime("%-d/%-m")
+        cond = r.get("Condition") or "—"
+        emoji = emoji_for(cond)
+        hi = "—" if pd.isna(r.get("High (°C)")) else f"{round(r['High (°C)'])}°"
+        lo = "—" if pd.isna(r.get("Low (°C)")) else f"{round(r['Low (°C)'])}°"
+        rain = "—" if pd.isna(r.get("Chance of rain (%)")) else f"{int(round(r['Chance of rain (%)']))}%"
+        cond_src = r.get("Condition Source") or "—"
+        hi_src = r.get("High Temp Source") or "—"
+        lo_src = r.get("Low Temp Source") or "—"
+        rain_src = r.get("Chance of rain Source") or "—"
+
+        st.markdown(
+            f"""
+            <div class="weather-card" style="text-align:left;">
+              <strong>{day} ({date_str})</strong>&nbsp;&nbsp;
+              <span class="weather-condition" title="Condition source: {cond_src}">{emoji} {cond}</span>&nbsp;&nbsp;
+              <span class="weather-temp" title="High source: {hi_src}">↑ {hi}</span>&nbsp;/&nbsp;
+              <span class="weather-temp" title="Low source: {lo_src}">↓ {lo}</span>&nbsp;&nbsp;
+              <span class="weather-rain" title="Rain source: {rain_src}">{rain}</span>
+            </div>
+            """, unsafe_allow_html=True
+        )
+
+# =========================
+# App UI
+# =========================
 st.title("🌤️ Optimistic Weather")
-st.caption("iOS-style layout with optimistic/pessimistic picking across multiple models. Sources show on hover.")
-st.markdown("""
-<style>
-.headline {
-    text-align: center;
-    padding: 6px;
-    margin-bottom: 12px;
-}
-.headline-city {
-    font-size: 20px;
-    font-weight: 600;
-    margin-bottom: 2px;
-}
-.headline-today {
-    font-size: 14px;
-    color: #444;
-}
-.headline-condition {
-    font-size: 15px;
-    font-weight: 500;
-    margin-top: 4px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-
+st.caption("iOS-style layout; optimistic/pessimistic picks across multiple models. Hover for sources.")
 
 left, right = st.columns([3, 2])
 with left:
@@ -369,7 +475,8 @@ with right:
     mode = st.radio("Forecast mode", options=["Optimistic", "Pessimistic", "Side by side"], horizontal=True)
 
 models_selected = st.multiselect(
-    "Sources (models)", options=CANDIDATE_MODELS,
+    "Sources (models)",
+    options=CANDIDATE_MODELS,
     default=["gfs_seamless", "icon_seamless", "ecmwf_ifs04", "ukmo_seamless"],
 )
 
@@ -377,7 +484,8 @@ if st.button("Get forecast", type="primary"):
     try:
         lat, lon, city, country, tz = geocode(location)
     except Exception as e:
-        st.error(f"Could not find that location. {e}"); st.stop()
+        st.error(f"Could not find that location. {e}")
+        st.stop()
 
     st.success(f"Using **{city}, {country}** · ({lat:.4f}, {lon:.4f}) · TZ: {tz}")
 
@@ -385,122 +493,118 @@ if st.button("Get forecast", type="primary"):
         hourly_all, daily_all = fetch_openmeteo(lat, lon, tz, models_selected)
 
     if hourly_all.empty and daily_all.empty:
-        st.warning("No data returned. Try different models or a nearby location."); st.stop()
+        st.warning("No data returned. Try different models or a nearby location.")
+        st.stop()
 
-    # Build views
-    # Hourly (today) dataset
+    # Prepare datasets
     hourly_today = hourly_all.copy()
-
-    # Daily (>= today)
     today = datetime.now().date()
     daily_future = daily_all[daily_all["date"] >= today].copy()
 
-    # Compose independent picks for current mode
-    def daily_for_mode(m):
-        df = independent_metric_picks(daily_future, mode=m, is_hourly=False)
-        # Normalize for headline: keep only today row if present
-        return df.sort_values("Date").head(8)
-
+    # Helpers to build mode-specific tables
     def hourly_for_mode(m):
         return independent_metric_picks(hourly_today, mode=m, is_hourly=True).sort_values("Time")
 
+    def daily_for_mode(m):
+        return independent_metric_picks(daily_future, mode=m, is_hourly=False).sort_values("Date").head(8)
+
     if mode in ["Optimistic", "Pessimistic"]:
-        # HEADLINE
         daily_mode = daily_for_mode(mode)
         render_headline(city, daily_mode)
-        # HOURLY (horizontal, each column = hour, top-to-bottom: condition, temp, rain)
-        if not hourly_today.empty:
-            hours = hourly_for_mode(mode)
-            # horizontally scrollable feel: use rows of columns
-            N = 6
-            for i in range(0, len(hours), N):
-                cols = st.columns(min(N, len(hours) - i))
-                for j, col in enumerate(cols, start=i):
-                    r = hours.iloc[j]
-                    with col:
-                        st.markdown(f"<div style='text-align:center; font-weight:600;'>{pd.to_datetime(r['Time']).strftime('%H:%M')}</div>", unsafe_allow_html=True)
-                        # Three stacked lines with tooltips (source in help)
-                        st.metric("Condition", f"{emoji_for(r['Condition'])} {r['Condition'] or '—'}",
-                                  help=f"Condition source: {r.get('Condition Source') or '—'}")
-                        st.metric("Temp", f"{'—' if pd.isna(r['Temp (°C)']) else round(r['Temp (°C)'],1)}°",
-                                  help=f"Temp source: {r.get('Temp Source') or '—'}")
-                        st.metric("Rain", f"{'—' if pd.isna(r['Chance of rain (%)']) else int(round(r['Chance of rain (%)']))}%",
-                                  help=f"Rain source: {r.get('Chance of rain Source') or '—'}")
-        else:
-            st.info("No hourly data for today returned.")
 
-        # DAILY (vertical list with date)
-        daily_mode = daily_for_mode(mode)
+        # Hourly (single mode) — slim tiles
+        st.markdown("### Hourly — Today")
+        hours = hourly_for_mode(mode)
+        if not hours.empty:
+            render_hourly_ios(hours)
+        else:
+            st.info("No hourly data for today.")
+
+        # Daily (single mode) — vertical list with ↑/↓
         st.markdown("### Daily — Next 7 Days")
-        render_daily_vertical(daily_mode)
+        if not daily_mode.empty:
+            render_daily_ios(daily_mode)
+        else:
+            st.info("No daily data available for the selected models.")
 
     else:
         # SIDE BY SIDE
-        # Build side-by-side hourly and daily frames
-        hourly_ss = side_by_side(hourly_today, is_hourly=True)
         daily_opt = daily_for_mode("Optimistic")
         daily_pes = daily_for_mode("Pessimistic")
-        # HEADLINE (two mini cards)
-        st.markdown(f"### {city}")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**Optimistic**")
-            if not daily_opt.empty:
-                r = daily_opt.iloc[0]
-                st.metric("Condition", f"{emoji_for(r['Condition'])} {r['Condition'] or '—'}",
-                          help=f"Condition source: {r.get('Condition Source') or '—'}")
-                st.metric("Temp", f"{'—' if pd.isna(r['Temp (°C)']) else round(r['Temp (°C)'],1)}°",
-                          help=f"Temp source: {r.get('Temp Source') or '—'}")
-                st.metric("Rain", f"{'—' if pd.isna(r['Chance of rain (%)']) else int(round(r['Chance of rain (%)']))}%",
-                          help=f"Rain source: {r.get('Chance of rain Source') or '—'}")
-        with c2:
-            st.markdown("**Pessimistic**")
-            if not daily_pes.empty:
-                r = daily_pes.iloc[0]
-                st.metric("Condition", f"{emoji_for(r['Condition'])} {r['Condition'] or '—'}",
-                          help=f"Condition source: {r.get('Condition Source') or '—'}")
-                st.metric("Temp", f"{'—' if pd.isna(r['Temp (°C)']) else round(r['Temp (°C)'],1)}°",
-                          help=f"Temp source: {r.get('Temp Source') or '—'}")
-                st.metric("Rain", f"{'—' if pd.isna(r['Chance of rain (%)']) else int(round(r['Chance of rain (%)']))}%",
-                          help=f"Rain source: {r.get('Chance of rain Source') or '—'}")
 
-        # HOURLY — stacked opt/pes per hour (sources in tooltips)
+        render_headline_side_by_side(city, daily_opt, daily_pes)
+
+        # Hourly — stacked opt/pes with tooltips
         st.markdown("### Hourly — Today (Optimistic over Pessimistic)")
-        render_hourly_stacked_side_by_side(hourly_ss)
+        hourly_ss = side_by_side(hourly_today, is_hourly=True)
+        if not hourly_ss.empty:
+            render_hourly_stacked_side_by_side(hourly_ss)
+        else:
+            st.info("No hourly data for today.")
 
-        # DAILY — two brackets per row (we’ll keep sources as tooltips via two columns)
+        # Daily — two compact cards per day
         st.markdown("### Daily — Next 7 Days")
-        # Build per-day paired rows
-        daily_opt = daily_opt.set_index("Date")
-        daily_pes = daily_pes.set_index("Date")
-        all_dates = sorted(set(daily_opt.index).union(daily_pes.index))[:8]
-        for d in all_dates:
-            day = pd.to_datetime(d).strftime("%a")
-            date_str = pd.to_datetime(d).strftime("%-d/%-m")
-            st.markdown(f"**{day} ({date_str})**")
-            colL, colR = st.columns(2)
-            with colL:
-                if d in daily_opt.index:
-                    r = daily_opt.loc[d]
-                    st.caption("Optimistic")
-                    st.metric("Condition", f"{emoji_for(r['Condition'])} {r['Condition'] or '—'}",
-                              help=f"Condition source: {r.get('Condition Source') or '—'}")
-                    st.metric("Temp", f"{'—' if pd.isna(r['Temp (°C)']) else round(r['Temp (°C)'],1)}°",
-                              help=f"Temp source: {r.get('Temp Source') or '—'}")
-                    st.metric("Rain", f"{'—' if pd.isna(r['Chance of rain (%)']) else int(round(r['Chance of rain (%)']))}%",
-                              help=f"Rain source: {r.get('Chance of rain Source') or '—'}")
-            with colR:
-                if d in daily_pes.index:
-                    r = daily_pes.loc[d]
-                    st.caption("Pessimistic")
-                    st.metric("Condition", f"{emoji_for(r['Condition'])} {r['Condition'] or '—'}",
-                              help=f"Condition source: {r.get('Condition Source') or '—'}")
-                    st.metric("Temp", f"{'—' if pd.isna(r['Temp (°C)']) else round(r['Temp (°C)'],1)}°",
-                              help=f"Temp source: {r.get('Temp Source') or '—'}")
-                    st.metric("Rain", f"{'—' if pd.isna(r['Chance of rain (%)']) else int(round(r['Chance of rain (%)']))}%",
-                              help=f"Rain source: {r.get('Chance of rain Source') or '—'}")
+        if not daily_opt.empty or not daily_pes.empty:
+            # align by calendar date
+            opt_idx = daily_opt.set_index("Date") if not daily_opt.empty else pd.DataFrame().set_index(pd.Index([]))
+            pes_idx = daily_pes.set_index("Date") if not daily_pes.empty else pd.DataFrame().set_index(pd.Index([]))
+            all_dates = sorted(set(opt_idx.index).union(set(pes_idx.index)))[:8]
+            for d in all_dates:
+                day = pd.to_datetime(d).strftime("%a")
+                date_str = pd.to_datetime(d).strftime("%-d/%-m")
+                st.markdown(f"**{day} ({date_str})**")
+                colL, colR = st.columns(2)
 
-    st.caption("Data via Open-Meteo. Temperatures in Celsius.")
+                # Optimistic card
+                with colL:
+                    if d in opt_idx.index:
+                        r = opt_idx.loc[d]
+                        cond = r.get("Condition") or "—"
+                        hi = "—" if pd.isna(r.get("High (°C)")) else f"{round(r['High (°C)'])}°"
+                        lo = "—" if pd.isna(r.get("Low (°C)")) else f"{round(r['Low (°C)'])}°"
+                        rain = "—" if pd.isna(r.get("Chance of rain (%)")) else f"{int(round(r['Chance of rain (%)']))}%"
+                        st.markdown(
+                            f"""
+                            <div class="weather-card card" style="text-align:left;">
+                              <div class="badge">Optimistic</div>
+                              <div class="weather-condition" title="Condition source: {r.get('Condition Source') or '—'}">
+                                {emoji_for(cond)} {cond}
+                              </div>
+                              <div class="weather-temp">
+                                <span title="High source: {r.get('High Temp Source') or '—'}">↑ {hi}</span> /
+                                <span title="Low source: {r.get('Low Temp Source') or '—'}">↓ {lo}</span>
+                              </div>
+                              <div class="weather-rain" title="Rain source: {r.get('Chance of rain Source') or '—'}">{rain}</div>
+                            </div>
+                            """, unsafe_allow_html=True
+                        )
 
+                # Pessimistic card
+                with colR:
+                    if d in pes_idx.index:
+                        r = pes_idx.loc[d]
+                        cond = r.get("Condition") or "—"
+                        hi = "—" if pd.isna(r.get("High (°C)")) else f"{round(r['High (°C)'])}°"
+                        lo = "—" if pd.isna(r.get("Low (°C)")) else f"{round(r['Low (°C)'])}°"
+                        rain = "—" if pd.isna(r.get("Chance of rain (%)")) else f"{int(round(r['Chance of rain (%)']))}%"
+                        st.markdown(
+                            f"""
+                            <div class="weather-card card" style="text-align:left;">
+                              <div class="badge">Pessimistic</div>
+                              <div class="weather-condition" title="Condition source: {r.get('Condition Source') or '—'}">
+                                {emoji_for(cond)} {cond}
+                              </div>
+                              <div class="weather-temp">
+                                <span title="High source: {r.get('High Temp Source') or '—'}">↑ {hi}</span> /
+                                <span title="Low source: {r.get('Low Temp Source') or '—'}">↓ {lo}</span>
+                              </div>
+                              <div class="weather-rain" title="Rain source: {r.get('Chance of rain Source') or '—'}">{rain}</div>
+                            </div>
+                            """, unsafe_allow_html=True
+                        )
+        else:
+            st.info("No daily data available for the selected models.")
+
+    st.caption("Data via Open-Meteo. Temperatures in °C.")
 else:
     st.info("Enter a location, choose a mode, and click **Get forecast**. 😉")
