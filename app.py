@@ -2,8 +2,7 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime, timedelta, timezone
-from functools import lru_cache
+from datetime import datetime, timezone
 
 st.set_page_config(page_title="Optimistic Weather", page_icon="🌤️", layout="wide")
 
@@ -27,12 +26,11 @@ WEATHER_CODE_MAP = {
     85: ("Snow showers: slight", 23), 86: ("Snow showers: heavy", 24),
     95: ("Thunderstorm", 25), 96: ("Thunderstorm with slight hail", 26), 99: ("Thunderstorm with heavy hail", 27),
 }
-# Lower rank is "nicer" for optimistic selection.
 def code_to_text(code):
     label, rank = WEATHER_CODE_MAP.get(int(code), ("Unknown", 99))
     return label, rank
 
-@lru_cache(maxsize=256)
+@st.cache_data(show_spinner=False)
 def geocode(query: str):
     """Return (lat, lon, name, country, timezone) using Open-Meteo geocoding."""
     url = "https://geocoding-api.open-meteo.com/v1/search"
@@ -44,8 +42,7 @@ def geocode(query: str):
     res = data["results"][0]
     return float(res["latitude"]), float(res["longitude"]), res.get("name", query), res.get("country", ""), res.get("timezone", "UTC")
 
-# A curated set of models that Open-Meteo commonly exposes; if a model isn't available for a region/time,
-# Open-Meteo will ignore it gracefully.
+# Candidate weather models available via Open-Meteo.
 CANDIDATE_MODELS = [
     "gfs_seamless",          # NOAA Global Forecast System
     "icon_seamless",         # DWD ICON
@@ -53,9 +50,10 @@ CANDIDATE_MODELS = [
     "meteofrance_seamless",  # Météo-France
     "gem_global",            # Environment Canada
     "jma_seamless",          # JMA
-    "ukmo_seamless",         # UK Met Office global (if available via Open-Meteo)
+    "ukmo_seamless",         # UK Met Office global (if available)
 ]
 
+@st.cache_data(show_spinner=False)
 def fetch_openmeteo(lat, lon, tz, models):
     """
     Fetch hourly (today) and daily (next 7 days) forecasts from Open-Meteo for each requested model.
@@ -69,14 +67,8 @@ def fetch_openmeteo(lat, lon, tz, models):
         "daily": ["weathercode", "precipitation_probability_max", "temperature_2m_max", "temperature_2m_min"],
         "timezone": tz,
         "forecast_days": 8,  # today + next 7
-        "models": ",".join(models),
     }
-    r = requests.get(base, params=params, timeout=20)
-    r.raise_for_status()
-    data = r.json()
 
-    # Open-Meteo returns merged arrays; also includes "current" model used per variable under 'elevation' metadata in some cases.
-    # To treat each model as a separate "source", use the /forecast for each model individually (more reliable).
     hourly_frames = []
     daily_frames  = []
 
@@ -100,7 +92,7 @@ def fetch_openmeteo(lat, lon, tz, models):
                 "weathercode": hh.get("weathercode"),
             })
             hdf["source"] = m
-            # Keep only today's hours
+            # Keep only today's hours (local tz per API param)
             today_str = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
             hdf["date"] = hdf["time"].dt.strftime("%Y-%m-%d")
             hdf = hdf[hdf["date"] == today_str].drop(columns=["date"])
@@ -108,18 +100,17 @@ def fetch_openmeteo(lat, lon, tz, models):
 
         # Daily (today + next 7)
         ddaily = dd.get("daily", {})
-        if ddaily and "time" in ddaily:
+        if ddaily and ddaily.get("time"):
+            dti = pd.to_datetime(ddaily["time"])
             ddf = pd.DataFrame({
-                "date": pd.to_datetime(ddaily["time"]).dt.date,
+                "date": dti.date,  # <-- fixed for pandas 2.x (DatetimeIndex.date)
                 "wcode_day": ddaily.get("weathercode"),
                 "precip_prob_max": ddaily.get("precipitation_probability_max"),
                 "tmax_c": ddaily.get("temperature_2m_max"),
                 "tmin_c": ddaily.get("temperature_2m_min"),
             })
             ddf["source"] = m
-            # Drop the trailing day if more than 8 just in case
             ddf = ddf.iloc[:8]
-            # Remove today row later if we only want "next 7 days" section to start tomorrow
             daily_frames.append(ddf)
 
     hourly_all = pd.concat(hourly_frames, ignore_index=True) if hourly_frames else pd.DataFrame()
@@ -130,8 +121,8 @@ def pick_best_per_key(df: pd.DataFrame, key_cols, mode: str, is_hourly: bool):
     """
     For each timestamp (hourly) or date (daily), pick the 'best' or 'worst' row across sources.
     Tie-breakers:
-      Optimistic: lowest precip_prob (or precip_prob_max), then highest temperature, then nicest weathercode rank.
-      Pessimistic: highest precip_prob, then lowest temperature, then worst weathercode rank.
+      Optimistic: lowest precip_prob → highest temp → nicest weathercode rank.
+      Pessimistic: highest precip_prob → lowest temp → worst weathercode rank.
     """
     if df.empty:
         return df
@@ -139,11 +130,9 @@ def pick_best_per_key(df: pd.DataFrame, key_cols, mode: str, is_hourly: bool):
     out_rows = []
     group_key = "time" if is_hourly else "date"
 
-    for k, g in df.groupby(group_key):
-        # Compute comparable features
+    for _, g in df.groupby(group_key):
         g = g.copy()
         if is_hourly:
-            # some models may lack precip_prob; treat None as 0 (optimistic) or 100 (pessimistic) strategically
             if mode == "Optimistic":
                 g["pp"] = g["precip_prob"].fillna(0)
                 g["temp"] = g["temperature_c"]
@@ -151,36 +140,27 @@ def pick_best_per_key(df: pd.DataFrame, key_cols, mode: str, is_hourly: bool):
                 g["pp"] = g["precip_prob"].fillna(100)
                 g["temp"] = g["temperature_c"]
             g["wc_rank"] = g["weathercode"].apply(lambda x: code_to_text(x)[1] if pd.notna(x) else 99)
-            # Sort by rules
-            if mode == "Optimistic":
-                g = g.sort_values(by=["pp", "temp", "wc_rank"], ascending=[True, False, True])
-            else:
-                g = g.sort_values(by=["pp", "temp", "wc_rank"], ascending=[False, True, False])
+            g = g.sort_values(
+                by=["pp", "temp", "wc_rank"],
+                ascending=[True, False, True] if mode == "Optimistic" else [False, True, False]
+            )
             best = g.iloc[0].to_dict()
-            label, _ = code_to_text(best.get("weathercode", 99))
-            best["condition"] = label
+            best["condition"] = code_to_text(best.get("weathercode", 99))[0]
             out_rows.append(best)
         else:
-            # daily
             if mode == "Optimistic":
                 g["pp"] = g["precip_prob_max"].fillna(0)
-                # prefer higher max temp for optimism
                 g["temp_key"] = g["tmax_c"]
             else:
                 g["pp"] = g["precip_prob_max"].fillna(100)
-                # prefer lower min temp for pessimism
                 g["temp_key"] = g["tmin_c"]
-
             g["wc_rank"] = g["wcode_day"].apply(lambda x: code_to_text(x)[1] if pd.notna(x) else 99)
-
-            if mode == "Optimistic":
-                g = g.sort_values(by=["pp", "temp_key", "wc_rank"], ascending=[True, False, True])
-            else:
-                g = g.sort_values(by=["pp", "temp_key", "wc_rank"], ascending=[False, True, False])
-
+            g = g.sort_values(
+                by=["pp", "temp_key", "wc_rank"],
+                ascending=[True, False, True] if mode == "Optimistic" else [False, True, False]
+            )
             best = g.iloc[0].to_dict()
-            label, _ = code_to_text(best.get("wcode_day", 99))
-            best["condition"] = label
+            best["condition"] = code_to_text(best.get("wcode_day", 99))[0]
             out_rows.append(best)
 
     return pd.DataFrame(out_rows)
@@ -208,7 +188,7 @@ def style_sources_column(df: pd.DataFrame):
 # ---------------------------
 
 st.title("🌤️ Optimistic Weather")
-st.caption("Pick the rosiest (or grumpiest) forecast by cherry-picking across multiple weather models.")
+st.caption("Cherry-pick across multiple models for the rosiest (or grumpiest) forecast.")
 
 left, right = st.columns([3, 2])
 with left:
@@ -249,10 +229,8 @@ if st.button("Get forecast", type="primary"):
     # ---------------------------
     st.subheader("Hourly — Today")
     if not hourly_all.empty:
-        # Compose best/worst per hour
         hourly_pick = pick_best_per_key(hourly_all, ["time"], mode=mode, is_hourly=True)
         if not hourly_pick.empty:
-            # Select/rename columns for display
             show = hourly_pick[["time", "source", "temperature_c", "precip_prob", "condition"]].copy()
             show = show.rename(columns={
                 "time": "Time",
@@ -266,28 +244,25 @@ if st.button("Get forecast", type="primary"):
             st.info("Hourly data wasn’t available for today from the chosen sources.")
 
         with st.expander("See all sources (hourly)"):
-            if not hourly_all.empty:
-                h_all = hourly_all.copy()
-                h_all["condition"] = h_all["weathercode"].apply(lambda x: code_to_text(x)[0] if pd.notna(x) else "—")
-                h_all = h_all.rename(columns={
-                    "time": "Time",
-                    "source": "Source",
-                    "temperature_c": "Temp (°C)",
-                    "precip_prob": "Chance of rain (%)",
-                    "condition": "Condition"
-                }).sort_values(["Time", "Source"])
-                st.dataframe(h_all[["Time", "Source", "Temp (°C)", "Chance of rain (%)", "Condition"]],
-                             use_container_width=True, hide_index=True)
-
+            h_all = hourly_all.copy()
+            h_all["condition"] = h_all["weathercode"].apply(lambda x: code_to_text(x)[0] if pd.notna(x) else "—")
+            h_all = h_all.rename(columns={
+                "time": "Time",
+                "source": "Source",
+                "temperature_c": "Temp (°C)",
+                "precip_prob": "Chance of rain (%)",
+                "condition": "Condition"
+            }).sort_values(["Time", "Source"])
+            st.dataframe(h_all[["Time", "Source", "Temp (°C)", "Chance of rain (%)", "Condition"]],
+                         use_container_width=True, hide_index=True)
     else:
         st.info("No hourly data for today returned.")
 
     # ---------------------------
-    # Daily — Next 7 days
+    # Daily — Next 7 Days
     # ---------------------------
     st.subheader("Daily — Next 7 Days")
     if not daily_all.empty:
-        # For the summary section, start from tomorrow
         today = datetime.now().date()
         daily_all_future = daily_all[daily_all["date"] >= today]
 
@@ -302,7 +277,6 @@ if st.button("Get forecast", type="primary"):
                 "precip_prob_max": "Max chance of rain (%)",
                 "condition": "Condition"
             }).sort_values("Date")
-            # Keep only next 7 days (including today if present)
             dshow = dshow.head(8)  # safety cap
             st.dataframe(dshow, use_container_width=True, hide_index=True)
         else:
