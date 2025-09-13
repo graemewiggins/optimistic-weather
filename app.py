@@ -59,7 +59,14 @@ st.markdown("""
 
 /* Mini stacks inside a tile */
 .hour-time { text-align:center; font-weight:600; font-size:12px; margin-bottom:4px; }
-.hour-cond  { text-align:center; font-size:13px; }
+.hour-cond  { 
+  text-align:center; 
+  font-size:13px; 
+  white-space: normal;   /* allow wrapping */
+  word-wrap: break-word; /* break long words if needed */
+  line-height: 1.2;      /* tighter lines */
+}
+
 .hour-temp  { text-align:center; font-size:12px; }
 .hour-rain  { text-align:center; font-size:11px; color:#555; }
 
