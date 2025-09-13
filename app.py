@@ -13,26 +13,46 @@ st.set_page_config(page_title="Optimistic Weather", page_icon="🌤️", layout=
 # =========================
 st.markdown("""
 <style>
-/* Headline */
-.headline { text-align:center; padding: 6px; margin-bottom: 12px; }
-.headline-city { font-size: 20px; font-weight: 600; margin-bottom: 2px; }
-.headline-today { font-size: 14px; color: #444; }
-.headline-condition { font-size: 15px; font-weight: 500; margin-top: 4px; }
+/* NEW: horizontal scroller for hourly tiles */
+.hscroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 6px;
+  margin: 6px 0 2px 0;
+  border-bottom: 1px solid #eee;
+}
 
-/* Tiles & text */
-.weather-card { text-align:center; font-size:13px; padding:4px; }
-.weather-time { font-weight:600; margin: 2px 0 4px 0; text-align:center; }
-.weather-condition { font-size:14px; }
-.weather-temp { font-size:13px; }
-.weather-rain { font-size:12px; color:#555; }
+/* A single slim hour tile */
+.hour-tile {
+  display: inline-block;
+  vertical-align: top;
+  width: 88px;             /* <-- make thinner/wider by changing this */
+  box-sizing: border-box;
+  margin-right: 6px;
+  padding: 6px 6px 8px 6px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fff;
+}
 
-/* Subtle cards */
-.card { border:1px solid #ddd; border-radius:8px; padding:6px; }
-.card + .card { margin-top:4px; }
-.badge { font-size:11px; color:#999; }
-.row { display:block; margin-bottom:4px; }
+/* Mini stacks inside a tile */
+.hour-time { text-align:center; font-weight:600; font-size:12px; margin-bottom:4px; }
+.hour-cond  { text-align:center; font-size:13px; }
+.hour-temp  { text-align:center; font-size:12px; }
+.hour-rain  { text-align:center; font-size:11px; color:#555; }
+
+/* In side-by-side: two compact cards stacked */
+.hour-half {
+  border-top: 1px dashed #eee;
+  margin-top: 6px;
+  padding-top: 6px;
+}
+.hour-badge { font-size:10px; color:#888; text-transform:uppercase; letter-spacing:.3px; text-align:center; margin-bottom:2px; }
 </style>
 """, unsafe_allow_html=True)
+
 
 # =========================
 # Weather mapping
@@ -352,84 +372,78 @@ def render_headline_side_by_side(city, daily_opt, daily_pes):
             )
 
 def render_hourly_ios(hours_df):
-    """Single-mode hourly: slim tiles across, each column: Condition → Temp → Rain → Time."""
+    """Single-mode hourly: slim tiles in a horizontal scroll strip."""
     if hours_df.empty:
         return
-    N = 6  # columns per row; tweak for density
-    for i in range(0, len(hours_df), N):
-        cols = st.columns(min(N, len(hours_df) - i))
-        for j, col in enumerate(cols, start=i):
-            if j >= len(hours_df): break
-            r = hours_df.iloc[j]
-            t = pd.to_datetime(r["Time"]).strftime("%H:%M")
-            cond = r.get("Condition") or "—"
-            emoji = emoji_for(cond)
-            temp = "—" if pd.isna(r.get("Temp (°C)")) else f"{round(r['Temp (°C)'])}°"
-            rain = "—" if pd.isna(r.get("Chance of rain (%)")) else f"{int(round(r['Chance of rain (%)']))}%"
-            cond_src = r.get("Condition Source") or "—"
-            temp_src = r.get("Temp Source") or "—"
-            rain_src = r.get("Chance of rain Source") or "—"
+    tiles = []
+    for _, r in hours_df.sort_values("Time").iterrows():
+        t = pd.to_datetime(r["Time"]).strftime("%H:%M")
+        cond = r.get("Condition") or "—"
+        emoji = emoji_for(cond)
+        temp = "—" if pd.isna(r.get("Temp (°C)")) else f"{round(r['Temp (°C)'])}°"
+        rain = "—" if pd.isna(r.get("Chance of rain (%)")) else f"{int(round(r['Chance of rain (%)']))}%"
+        cond_src = r.get("Condition Source") or "—"
+        temp_src = r.get("Temp Source") or "—"
+        rain_src = r.get("Chance of rain Source") or "—"
 
-            col.markdown(f"<div class='weather-time'>{t}</div>", unsafe_allow_html=True)
-            col.markdown(
-                f"""
-                <div class="weather-card">
-                  <div class="weather-condition" title="Condition source: {cond_src}">{emoji} {cond}</div>
-                  <div class="weather-temp" title="Temp source: {temp_src}">{temp}</div>
-                  <div class="weather-rain" title="Rain source: {rain_src}">{rain}</div>
-                </div>
-                """, unsafe_allow_html=True
-            )
+        tiles.append(f"""
+          <div class="hour-tile" title="Condition: {cond_src}\nTemp: {temp_src}\nRain: {rain_src}">
+            <div class="hour-time">{t}</div>
+            <div class="hour-cond">{emoji} {cond}</div>
+            <div class="hour-temp">{temp}</div>
+            <div class="hour-rain">{rain}</div>
+          </div>
+        """)
+    html = f"""<div class="hscroll">{''.join(tiles)}</div>"""
+    st.markdown(html, unsafe_allow_html=True)
+
 
 def render_hourly_stacked_side_by_side(hourly_ss):
-    """Side-by-side mode: per hour, stacked Optimistic (top) & Pessimistic (bottom)."""
+    """Side-by-side mode: for each hour, two mini stacks (Optimistic top, Pessimistic bottom) in a horizontal scroller."""
     if hourly_ss.empty:
         return
-    hourly_ss = hourly_ss.sort_values("Time")
-    N = 4
-    for i in range(0, len(hourly_ss), N):
-        cols = st.columns(min(N, len(hourly_ss) - i))
-        for j, col in enumerate(cols, start=i):
-            if j >= len(hourly_ss): break
-            row = hourly_ss.iloc[j]
-            t = pd.to_datetime(row["Time"]).strftime("%H:%M")
-            col.markdown(f"<div class='weather-time'>{t}</div>", unsafe_allow_html=True)
+    tiles = []
+    for _, row in hourly_ss.sort_values("Time").iterrows():
+        t = pd.to_datetime(row["Time"]).strftime("%H:%M")
 
-            # Optimistic
-            col.markdown(
-                f"""
-                <div class="weather-card card">
-                  <div class="badge">Optimistic</div>
-                  <div class="weather-condition" title="Condition source: {row.get('Optimistic Condition Source') or '—'}">
-                    {emoji_for(row.get('Optimistic Condition') or 'Unknown')} {row.get('Optimistic Condition') or '—'}
-                  </div>
-                  <div class="weather-temp" title="Temp source: {row.get('Optimistic Temp Source') or '—'}">
-                    {'—' if pd.isna(row.get('Optimistic Temp')) else f"{round(row['Optimistic Temp'])}°"}
-                  </div>
-                  <div class="weather-rain" title="Rain source: {row.get('Optimistic Chance of rain Source') or '—'}">
-                    {'—' if pd.isna(row.get('Optimistic Chance of rain')) else f"{int(round(row['Optimistic Chance of rain']))}%"}
-                  </div>
-                </div>
-                """, unsafe_allow_html=True
-            )
+        # Optimistic values
+        o_cond = row.get("Optimistic Condition") or "—"
+        o_emoji = emoji_for(o_cond)
+        o_temp = "—" if pd.isna(row.get("Optimistic Temp")) else f"{round(row['Optimistic Temp'])}°"
+        o_rain = "—" if pd.isna(row.get("Optimistic Chance of rain")) else f"{int(round(row['Optimistic Chance of rain']))}%"
+        o_cond_src = row.get("Optimistic Condition Source") or "—"
+        o_temp_src = row.get("Optimistic Temp Source") or "—"
+        o_rain_src = row.get("Optimistic Chance of rain Source") or "—"
 
-            # Pessimistic
-            col.markdown(
-                f"""
-                <div class="weather-card card">
-                  <div class="badge">Pessimistic</div>
-                  <div class="weather-condition" title="Condition source: {row.get('Pessimistic Condition Source') or '—'}">
-                    {emoji_for(row.get('Pessimistic Condition') or 'Unknown')} {row.get('Pessimistic Condition') or '—'}
-                  </div>
-                  <div class="weather-temp" title="Temp source: {row.get('Pessimistic Temp Source') or '—'}">
-                    {'—' if pd.isna(row.get('Pessimistic Temp')) else f"{round(row['Pessimistic Temp'])}°"}
-                  </div>
-                  <div class="weather-rain" title="Rain source: {row.get('Pessimistic Chance of rain Source') or '—'}">
-                    {'—' if pd.isna(row.get('Pessimistic Chance of rain')) else f"{int(round(row['Pessimistic Chance of rain']))}%"}
-                  </div>
-                </div>
-                """, unsafe_allow_html=True
-            )
+        # Pessimistic values
+        p_cond = row.get("Pessimistic Condition") or "—"
+        p_emoji = emoji_for(p_cond)
+        p_temp = "—" if pd.isna(row.get("Pessimistic Temp")) else f"{round(row['Pessimistic Temp'])}°"
+        p_rain = "—" if pd.isna(row.get("Pessimistic Chance of rain")) else f"{int(round(row['Pessimistic Chance of rain']))}%"
+        p_cond_src = row.get("Pessimistic Condition Source") or "—"
+        p_temp_src = row.get("Pessimistic Temp Source") or "—"
+        p_rain_src = row.get("Pessimistic Chance of rain Source") or "—"
+
+        tiles.append(f"""
+          <div class="hour-tile" title="Opt: Cond {o_cond_src}, Temp {o_temp_src}, Rain {o_rain_src}\nPes: Cond {p_cond_src}, Temp {p_temp_src}, Rain {p_rain_src}">
+            <div class="hour-time">{t}</div>
+
+            <div class="hour-badge">Optimistic</div>
+            <div class="hour-cond">{o_emoji} {o_cond}</div>
+            <div class="hour-temp">{o_temp}</div>
+            <div class="hour-rain">{o_rain}</div>
+
+            <div class="hour-half">
+              <div class="hour-badge">Pessimistic</div>
+              <div class="hour-cond">{p_emoji} {p_cond}</div>
+              <div class="hour-temp">{p_temp}</div>
+              <div class="hour-rain">{p_rain}</div>
+            </div>
+          </div>
+        """)
+    html = f"""<div class="hscroll">{''.join(tiles)}</div>"""
+    st.markdown(html, unsafe_allow_html=True)
+
 
 def render_daily_ios(daily_df):
     """Single-mode daily: vertical list with Day (dd/mm), Condition, ↑High/↓Low, Rain. Tooltips show sources."""
