@@ -633,6 +633,34 @@ def render_hourly_temp_chart(hourly_ss: pd.DataFrame):
         )
         st.altair_chart(chart, use_container_width=True)
 
+def render_hourly_rain_chart(hourly_ss: pd.DataFrame):
+    """Line chart of hourly optimistic vs pessimistic rain chance (%)."""
+    if hourly_ss.empty:
+        return
+
+    df_plot = hourly_ss.copy()
+    df_plot = df_plot[["Time", "Optimistic Chance of rain", "Pessimistic Chance of rain"]].melt(
+        id_vars="Time", var_name="Scenario", value_name="Chance of rain (%)"
+    )
+    df_plot["Time"] = pd.to_datetime(df_plot["Time"])
+
+    chart = (
+        alt.Chart(df_plot)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("Time:T", title="Hour"),
+            y=alt.Y(
+                "Chance of rain (%):Q",
+                title="Chance of rain (%)",
+                scale=alt.Scale(domain=[0, 100])  # <-- lock axis to 0–100
+            ),
+            color=alt.Color("Scenario:N", title="", sort=["Optimistic Chance of rain", "Pessimistic Chance of rain"]),
+            tooltip=["Time:T", "Scenario:N", alt.Tooltip("Chance of rain (%):Q", format=".0f")]
+        )
+        .properties(height=300)
+        .interactive()
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 
 # =========================
@@ -733,7 +761,10 @@ if st.button("Get forecast", type="primary"):
         if not hourly_ss.empty:
             st.markdown("### Temperature (Optimistic vs Pessimistic)")
             render_hourly_temp_chart(hourly_ss)
-
+        if not hourly_ss.empty:
+            st.markdown("### Chance of Rain (Optimistic vs Pessimistic)")
+            render_hourly_rain_chart(hourly_ss)
+    
 
         # Daily — stacked inline lines per day (your requested format)
         st.markdown("### Daily — Next 7 Days")
