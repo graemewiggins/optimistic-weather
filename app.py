@@ -180,9 +180,6 @@ def fetch_openmeteo(lat, lon, tz, models):
                 "weathercode": hh.get("weathercode"),
                 "source": m,
             })
-            today_str = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
-            h["date"] = h["time"].dt.strftime("%Y-%m-%d")
-            h = h[h["date"] == today_str].drop(columns=["date"])
             hourly_frames.append(h)
 
         ddaily = dd.get("daily", {})
@@ -539,13 +536,20 @@ if st.button("Get forecast", type="primary"):
         st.stop()
 
     # Prepare datasets
-    hourly_today = hourly_all.copy()
+# Build a rolling 24h window in the location's timezone
+# (Open-Meteo returned times are already in that tz because we requested timezone=tz)
+start = pd.Timestamp.now(tz).floor("H").tz_localize(None)   # current local hour (naive, same tz as data)
+end = start + pd.Timedelta(hours=23)
+
+hourly_rolling = hourly_all[(hourly_all["time"] >= start) & (hourly_all["time"] <= end)].copy()
+
+  
     today = datetime.now().date()
     daily_future = daily_all[daily_all["date"] >= today].copy()
 
     # Helpers to build mode-specific tables
     def hourly_for_mode(m):
-        return independent_metric_picks(hourly_today, mode=m, is_hourly=True).sort_values("Time")
+        return independent_metric_picks(hourly_rolling, mode=m, is_hourly=True).sort_values("Time")
 
     def daily_for_mode(m):
         return independent_metric_picks(daily_future, mode=m, is_hourly=False).sort_values("Date").head(8)
@@ -559,7 +563,7 @@ if st.button("Get forecast", type="primary"):
         render_headline(city, daily_mode)
 
         # Hourly — slim scroll strip
-        st.markdown("### Hourly — Today")
+        st.markdown("### Hourly — Next 24 Hours")
         hours = hourly_for_mode(mode)
         if not hours.empty:
             render_hourly_ios(hours)
@@ -581,8 +585,8 @@ if st.button("Get forecast", type="primary"):
         render_headline_side_by_side(city, daily_opt, daily_pes)
 
         # Hourly — stacked opt/pes scroll strip
-        st.markdown("### Hourly — Today (Optimistic over Pessimistic)")
-        hourly_ss = side_by_side(hourly_today, is_hourly=True)
+        st.markdown("### Hourly — Next 24 Hours (Optimistic over Pessimistic)")
+        hourly_ss = side_by_side(hourly_rolling, is_hourly=True)
         if not hourly_ss.empty:
             render_hourly_stacked_side_by_side(hourly_ss)
         else:
