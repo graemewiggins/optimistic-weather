@@ -129,10 +129,8 @@ def fetch_openmeteo(lat, lon, tz, models):
 
 def pick_best_per_key(df: pd.DataFrame, key_cols, mode: str, is_hourly: bool):
     """
-    For each timestamp (hourly) or date (daily), pick the 'best' or 'worst' row across sources.
-    Tie-breakers:
-      Optimistic: lowest precip_prob → highest temp → nicest weathercode rank.
-      Pessimistic: highest precip_prob → lowest temp → worst weathercode rank.
+    For each timestamp (hourly) or date (daily), pick the single 'best' or 'worst' row across sources
+    using combined rules. (Kept for reference/expanded view.)
     """
     if df.empty:
         return df
@@ -155,7 +153,7 @@ def pick_best_per_key(df: pd.DataFrame, key_cols, mode: str, is_hourly: bool):
                 ascending=[True, False, True] if mode == "Optimistic" else [False, True, False]
             )
             best = g.iloc[0].to_dict()
-            best["condition"] = code_to_text(best.get("weathercode", None))[0]  # safe
+            best["condition"] = code_to_text(best.get("weathercode", None))[0]
             out_rows.append(best)
         else:
             if mode == "Optimistic":
@@ -170,10 +168,100 @@ def pick_best_per_key(df: pd.DataFrame, key_cols, mode: str, is_hourly: bool):
                 ascending=[True, False, True] if mode == "Optimistic" else [False, True, False]
             )
             best = g.iloc[0].to_dict()
-            best["condition"] = code_to_text(best.get("wcode_day", None))[0]  # safe
+            best["condition"] = code_to_text(best.get("wcode_day", None))[0]
             out_rows.append(best)
 
     return pd.DataFrame(out_rows)
+
+def independent_metric_picks(df: pd.DataFrame, mode: str, is_hourly: bool):
+    """
+    For each time/date group, independently select:
+      - Temp (max for optimistic, min for pessimistic) + its source
+      - Chance of rain (min for optimistic, max for pessimistic) + its source
+      - Condition (best rank for optimistic, worst rank for pessimistic) + its source
+    Returns a tidy DataFrame with one row per time/date and value+source columns.
+    """
+    if df.empty:
+        return pd.DataFrame()
+
+    key = "time" if is_hourly else "date"
+    rows = []
+
+    for k, g in df.groupby(key):
+        g = g.copy()
+
+        if is_hourly:
+            # temp pick
+            temp_col = "temperature_c"
+            if mode == "Optimistic":
+                temp_row = g.loc[g[temp_col].idxmax()] if g[temp_col].notna().any() else None
+            else:
+                temp_row = g.loc[g[temp_col].idxmin()] if g[temp_col].notna().any() else None
+
+            # precip pick
+            pp_col = "precip_prob"
+            if mode == "Optimistic":
+                pp_row = g.loc[g[pp_col].fillna(9999).idxmin()] if g[pp_col].notna().any() else None
+            else:
+                pp_row = g.loc[g[pp_col].fillna(-1).idxmax()] if g[pp_col].notna().any() else None
+
+            # condition pick
+            g["wc_rank"] = g["weathercode"].apply(lambda x: code_to_text(x)[1] if pd.notna(x) else 99)
+            if mode == "Optimistic":
+                cond_row = g.loc[g["wc_rank"].idxmin()] if g["wc_rank"].notna().any() else None
+            else:
+                cond_row = g.loc[g["wc_rank"].idxmax()] if g["wc_rank"].notna().any() else None
+
+            rows.append({
+                "Time": k,
+                "Temp (°C)": None if temp_row is None else temp_row.get("temperature_c"),
+                "Chance of rain (%)": None if pp_row is None else pp_row.get("precip_prob"),
+                "Condition": None if cond_row is None else code_to_text(cond_row.get("weathercode", None))[0],
+                "Temp Source": None if temp_row is None else temp_row.get("source"),
+                "Chance of rain Source": None if pp_row is None else pp_row.get("source"),
+                "Condition Source": None if cond_row is None else cond_row.get("source"),
+            })
+
+        else:
+            # daily
+            # temp pick uses tmax for optimistic, tmin for pessimistic
+            if mode == "Optimistic":
+                temp_col = "tmax_c"
+                temp_row = g.loc[g[temp_col].idxmax()] if g[temp_col].notna().any() else None
+            else:
+                temp_col = "tmin_c"
+                temp_row = g.loc[g[temp_col].idxmin()] if g[temp_col].notna().any() else None
+
+            # precip pick
+            pp_col = "precip_prob_max"
+            if mode == "Optimistic":
+                pp_row = g.loc[g[pp_col].fillna(9999).idxmin()] if g[pp_col].notna().any() else None
+            else:
+                pp_row = g.loc[g[pp_col].fillna(-1).idxmax()] if g[pp_col].notna().any() else None
+
+            # condition pick
+            g["wc_rank"] = g["wcode_day"].apply(lambda x: code_to_text(x)[1] if pd.notna(x) else 99)
+            if mode == "Optimistic":
+                cond_row = g.loc[g["wc_rank"].idxmin()] if g["wc_rank"].notna().any() else None
+            else:
+                cond_row = g.loc[g["wc_rank"].idxmax()] if g["wc_rank"].notna().any() else None
+
+            # Display a single "Temp (°C)" column using the chosen temp value (max for optimistic, min for pessimistic)
+            temp_value = None
+            if temp_row is not None:
+                temp_value = temp_row.get(temp_col)
+
+            rows.append({
+                "Date": k,
+                "Temp (°C)": temp_value,
+                "Chance of rain (%)": None if pp_row is None else pp_row.get("precip_prob_max"),
+                "Condition": None if cond_row is None else code_to_text(cond_row.get("wcode_day", None))[0],
+                "Temp Source": None if temp_row is None else temp_row.get("source"),
+                "Chance of rain Source": None if pp_row is None else pp_row.get("source"),
+                "Condition Source": None if cond_row is None else cond_row.get("source"),
+            })
+
+    return pd.DataFrame(rows)
 
 def nice_source_name(s: str) -> str:
     mapping = {
@@ -193,19 +281,27 @@ def style_sources_column(df: pd.DataFrame):
         df["source"] = df["source"].apply(nice_source_name)
     return df
 
+def style_source_names_in_table(df: pd.DataFrame, cols):
+    """Apply nice_source_name to given source columns if present."""
+    df = df.copy()
+    for c in cols:
+        if c in df.columns:
+            df[c] = df[c].apply(lambda x: nice_source_name(x) if pd.notna(x) else x)
+    return df
+
 # ---------------------------
 # UI
 # ---------------------------
 
 st.title("🌤️ Optimistic Weather")
-st.caption("Cherry-pick across multiple models for the rosiest (or grumpiest) forecast.")
+st.caption("Cherry-pick across multiple models for the rosiest (or grumpiest) forecast — now with per-metric picks.")
 
 left, right = st.columns([3, 2])
 with left:
     location = st.text_input("Location", value="London")
 with right:
     mode = st.radio("Forecast mood", options=["Optimistic", "Pessimistic"], horizontal=True,
-                    help="Optimistic = dry, warm, sunny. Pessimistic = wet, cold, gloomy.")
+                    help="Optimistic = highest temp, lowest rain chance, nicest condition. Pessimistic = opposite.")
 
 models_selected = st.multiselect(
     "Sources (models)",
@@ -230,83 +326,81 @@ if st.button("Get forecast", type="primary"):
         st.warning("No data returned from sources. Try fewer/different models or another location.")
         st.stop()
 
-    # Pretty-up sources
+    # Pretty-up sources (for expanded 'all sources' views)
     hourly_all = style_sources_column(hourly_all)
     daily_all = style_sources_column(daily_all)
 
     # ---------------------------
-    # Hourly — Today
+    # Hourly — Independent per-metric picks (Today)
     # ---------------------------
-    st.subheader("Hourly — Today")
+    st.subheader("Hourly — Independent picks (Today)")
     if not hourly_all.empty:
-        hourly_pick = pick_best_per_key(hourly_all, ["time"], mode=mode, is_hourly=True)
-        if not hourly_pick.empty:
-            show = hourly_pick[["time", "source", "temperature_c", "precip_prob", "condition"]].copy()
-            show = show.rename(columns={
-                "time": "Time",
-                "source": "Chosen Source",
-                "temperature_c": "Temp (°C)",
-                "precip_prob": "Chance of rain (%)",
-                "condition": "Condition"
-            }).sort_values("Time")
-            st.dataframe(show, use_container_width=True, hide_index=True)
+        hourly_ind = independent_metric_picks(hourly_all, mode=mode, is_hourly=True)
+        if not hourly_ind.empty:
+            hourly_ind = style_source_names_in_table(
+                hourly_ind,
+                ["Temp Source", "Chance of rain Source", "Condition Source"]
+            ).sort_values("Time")
+            st.dataframe(hourly_ind, use_container_width=True, hide_index=True)
         else:
             st.info("Hourly data wasn’t available for today from the chosen sources.")
-
-        with st.expander("See all sources (hourly)"):
-            h_all = hourly_all.copy()
-            h_all["condition"] = h_all["weathercode"].apply(lambda x: code_to_text(x)[0] if pd.notna(x) else "—")
-            h_all = h_all.rename(columns={
-                "time": "Time",
-                "source": "Source",
-                "temperature_c": "Temp (°C)",
-                "precip_prob": "Chance of rain (%)",
-                "condition": "Condition"
-            }).sort_values(["Time", "Source"])
-            st.dataframe(h_all[["Time", "Source", "Temp (°C)", "Chance of rain (%)", "Condition"]],
-                         use_container_width=True, hide_index=True)
     else:
         st.info("No hourly data for today returned.")
 
     # ---------------------------
-    # Daily — Next 7 Days
+    # Daily — Independent per-metric picks (Next 7 Days)
     # ---------------------------
-    st.subheader("Daily — Next 7 Days")
+    st.subheader("Daily — Independent picks (Next 7 Days)")
     if not daily_all.empty:
         today = datetime.now().date()
         daily_all_future = daily_all[daily_all["date"] >= today]
-
-        daily_pick = pick_best_per_key(daily_all_future, ["date"], mode=mode, is_hourly=False)
-        if not daily_pick.empty:
-            dshow = daily_pick[["date", "source", "tmax_c", "tmin_c", "precip_prob_max", "condition"]].copy()
-            dshow = dshow.rename(columns={
-                "date": "Date",
-                "source": "Chosen Source",
-                "tmax_c": "High (°C)",
-                "tmin_c": "Low (°C)",
-                "precip_prob_max": "Max chance of rain (%)",
-                "condition": "Condition"
-            }).sort_values("Date")
-            dshow = dshow.head(8)  # safety cap
-            st.dataframe(dshow, use_container_width=True, hide_index=True)
+        daily_ind = independent_metric_picks(daily_all_future, mode=mode, is_hourly=False)
+        if not daily_ind.empty:
+            daily_ind = style_source_names_in_table(
+                daily_ind,
+                ["Temp Source", "Chance of rain Source", "Condition Source"]
+            ).sort_values("Date")
+            daily_ind = daily_ind.head(8)  # safety cap
+            st.dataframe(daily_ind, use_container_width=True, hide_index=True)
         else:
             st.info("No daily data available for the selected sources.")
-
-        with st.expander("See all sources (daily)"):
-            d_all = daily_all.copy()
-            d_all["condition"] = d_all["wcode_day"].apply(lambda x: code_to_text(x)[0] if pd.notna(x) else "—")
-            d_all = d_all.rename(columns={
-                "date": "Date",
-                "source": "Source",
-                "tmax_c": "High (°C)",
-                "tmin_c": "Low (°C)",
-                "precip_prob_max": "Max chance of rain (%)",
-                "condition": "Condition"
-            }).sort_values(["Date", "Source"])
-            st.dataframe(d_all[["Date", "Source", "High (°C)", "Low (°C)", "Max chance of rain (%)", "Condition"]],
-                         use_container_width=True, hide_index=True)
     else:
         st.info("No daily data returned.")
+
+    # ---------------------------
+    # Expanded views (optional)
+    # ---------------------------
+    with st.expander("See combined best/worst per time (single-source pick)"):
+        st.caption("This collapses all metrics into one 'best/worst' source per time (original behavior).")
+        # Hourly combined
+        if not hourly_all.empty:
+            hourly_pick = pick_best_per_key(hourly_all, ["time"], mode=mode, is_hourly=True)
+            if not hourly_pick.empty:
+                show = hourly_pick[["time", "source", "temperature_c", "precip_prob", "weathercode"]].copy()
+                show["Condition"] = show["weathercode"].apply(lambda x: code_to_text(x)[0] if pd.notna(x) else "—")
+                show = show.drop(columns=["weathercode"]).rename(columns={
+                    "time": "Time",
+                    "source": "Chosen Source",
+                    "temperature_c": "Temp (°C)",
+                    "precip_prob": "Chance of rain (%)",
+                }).sort_values("Time")
+                show["Chosen Source"] = show["Chosen Source"].apply(nice_source_name)
+                st.dataframe(show, use_container_width=True, hide_index=True)
+        # Daily combined
+        if not daily_all.empty:
+            daily_pick = pick_best_per_key(daily_all, ["date"], mode=mode, is_hourly=False)
+            if not daily_pick.empty:
+                dshow = daily_pick[["date", "source", "tmax_c", "tmin_c", "precip_prob_max", "wcode_day"]].copy()
+                dshow["Condition"] = dshow["wcode_day"].apply(lambda x: code_to_text(x)[0] if pd.notna(x) else "—")
+                dshow = dshow.drop(columns=["wcode_day"]).rename(columns={
+                    "date": "Date",
+                    "source": "Chosen Source",
+                    "tmax_c": "High (°C)",
+                    "tmin_c": "Low (°C)",
+                    "precip_prob_max": "Max chance of rain (%)",
+                }).sort_values("Date").head(8)
+                dshow["Chosen Source"] = dshow["Chosen Source"].apply(nice_source_name)
+                st.dataframe(dshow, use_container_width=True, hide_index=True)
 
     st.caption("Data via Open-Meteo (multiple numerical weather prediction models). Temperatures in Celsius.")
 
