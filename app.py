@@ -3,6 +3,7 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timezone
+import math
 
 st.set_page_config(page_title="Optimistic Weather", page_icon="🌤️", layout="wide")
 
@@ -26,9 +27,18 @@ WEATHER_CODE_MAP = {
     85: ("Snow showers: slight", 23), 86: ("Snow showers: heavy", 24),
     95: ("Thunderstorm", 25), 96: ("Thunderstorm with slight hail", 26), 99: ("Thunderstorm with heavy hail", 27),
 }
+
 def code_to_text(code):
-    label, rank = WEATHER_CODE_MAP.get(int(code), ("Unknown", 99))
-    return label, rank
+    """Map numeric weather codes to human-readable text and a rank (lower = nicer)."""
+    try:
+        if code is None:
+            return "Unknown", 99
+        if isinstance(code, float) and math.isnan(code):
+            return "Unknown", 99
+        c = int(code)
+    except Exception:
+        return "Unknown", 99
+    return WEATHER_CODE_MAP.get(c, ("Unknown", 99))
 
 @st.cache_data(show_spinner=False)
 def geocode(query: str):
@@ -103,7 +113,7 @@ def fetch_openmeteo(lat, lon, tz, models):
         if ddaily and ddaily.get("time"):
             dti = pd.to_datetime(ddaily["time"])
             ddf = pd.DataFrame({
-                "date": dti.date,  # <-- fixed for pandas 2.x (DatetimeIndex.date)
+                "date": dti.date,  # fixed for pandas 2.x
                 "wcode_day": ddaily.get("weathercode"),
                 "precip_prob_max": ddaily.get("precipitation_probability_max"),
                 "tmax_c": ddaily.get("temperature_2m_max"),
@@ -145,7 +155,7 @@ def pick_best_per_key(df: pd.DataFrame, key_cols, mode: str, is_hourly: bool):
                 ascending=[True, False, True] if mode == "Optimistic" else [False, True, False]
             )
             best = g.iloc[0].to_dict()
-            best["condition"] = code_to_text(best.get("weathercode", 99))[0]
+            best["condition"] = code_to_text(best.get("weathercode", None))[0]  # safe
             out_rows.append(best)
         else:
             if mode == "Optimistic":
@@ -160,7 +170,7 @@ def pick_best_per_key(df: pd.DataFrame, key_cols, mode: str, is_hourly: bool):
                 ascending=[True, False, True] if mode == "Optimistic" else [False, True, False]
             )
             best = g.iloc[0].to_dict()
-            best["condition"] = code_to_text(best.get("wcode_day", 99))[0]
+            best["condition"] = code_to_text(best.get("wcode_day", None))[0]  # safe
             out_rows.append(best)
 
     return pd.DataFrame(out_rows)
