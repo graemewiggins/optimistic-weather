@@ -660,6 +660,12 @@ if st.button("Get forecast", type="primary"):
     with st.spinner("Fetching forecasts..."):
         hourly_all, daily_all = fetch_openmeteo(lat, lon, tz, models_selected)
 
+    with st.expander("🔍 Debug: Raw daily data"):
+        st.dataframe(daily_all)
+
+    with st.expander("🔍 Debug: Raw hourly data"):
+        st.dataframe(hourly_all)
+
     if hourly_all.empty and daily_all.empty:
         st.warning("No data returned. Try different models or a nearby location.")
         st.stop()
