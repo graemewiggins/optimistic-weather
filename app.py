@@ -219,18 +219,64 @@ def side_by_side(df: pd.DataFrame, is_hourly: bool):
 # ---------------------------
 
 def render_headline(city, daily_df):
-    """Show today's headline: High/Low, Condition, Rain."""
-    if daily_df.empty: return
+    """Show today's headline: City, High/Low, Condition, Rain (slimmer iOS-style)."""
+    if daily_df.empty:
+        return
     today = datetime.now().date()
     today_rows = daily_df[daily_df["Date"] == today]
-    if today_rows.empty: return
+    if today_rows.empty:
+        return
     row = today_rows.iloc[0]
-    cond = row["Condition"]; emoji = emoji_for(cond)
-    high = row["Temp (°C)"];  # in opt/pes views this holds chosen temp; for headline we just show that mode's pick
-    rain = row["Chance of rain (%)"]
-    st.markdown(f"### {city}")
-    st.markdown(f"**Today:** {emoji} {cond} · **{rain if rain is not None else '—'}%** chance of rain")
-    # When in optimistic mode, high is tmax; pessimistic, low is tmin. If both wanted we'd compute separately.
+    cond = row["Condition"] or "—"
+    emoji = emoji_for(cond)
+    temp = "—" if pd.isna(row["Temp (°C)"]) else f"{round(row['Temp (°C)'])}°"
+    rain = "—" if pd.isna(row["Chance of rain (%)"]) else f"{int(round(row['Chance of rain (%)']))}%"
+
+    st.markdown(
+        f"""
+        <div class="headline">
+          <div class="headline-city">{city}</div>
+          <div class="headline-today">Today</div>
+          <div class="headline-condition">{emoji} {cond} · {temp} · {rain} rain</div>
+        </div>
+        """, unsafe_allow_html=True
+    )
+ # When in optimistic mode, high is tmax; pessimistic, low is tmin. If both wanted we'd compute separately.
+
+def render_headline_side_by_side(city, daily_opt, daily_pes):
+    st.markdown(f"<div class='headline-city'>{city}</div>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        if not daily_opt.empty:
+            r = daily_opt.iloc[0]
+            cond = r["Condition"] or "—"
+            emoji = emoji_for(cond)
+            temp = "—" if pd.isna(r["Temp (°C)"]) else f"{round(r['Temp (°C)'])}°"
+            rain = "—" if pd.isna(r["Chance of rain (%)"]) else f"{int(round(r['Chance of rain (%)']))}%"
+            st.markdown(
+                f"""
+                <div class="headline" style="border:1px solid #ddd; border-radius:8px;">
+                  <div class="headline-today">Optimistic</div>
+                  <div class="headline-condition">{emoji} {cond} · {temp} · {rain} rain</div>
+                </div>
+                """, unsafe_allow_html=True
+            )
+    with c2:
+        if not daily_pes.empty:
+            r = daily_pes.iloc[0]
+            cond = r["Condition"] or "—"
+            emoji = emoji_for(cond)
+            temp = "—" if pd.isna(r["Temp (°C)"]) else f"{round(r['Temp (°C)'])}°"
+            rain = "—" if pd.isna(r["Chance of rain (%)"]) else f"{int(round(r['Chance of rain (%)']))}%"
+            st.markdown(
+                f"""
+                <div class="headline" style="border:1px solid #ddd; border-radius:8px;">
+                  <div class="headline-today">Pessimistic</div>
+                  <div class="headline-condition">{emoji} {cond} · {temp} · {rain} rain</div>
+                </div>
+                """, unsafe_allow_html=True
+            )
+
 
 def render_daily_vertical(daily_df):
     """Daily vertical list: Day (dd/mm), Condition, High/Low, Rain."""
@@ -290,6 +336,31 @@ def render_hourly_stacked_side_by_side(hourly_ss):
 
 st.title("🌤️ Optimistic Weather")
 st.caption("iOS-style layout with optimistic/pessimistic picking across multiple models. Sources show on hover.")
+st.markdown("""
+<style>
+.headline {
+    text-align: center;
+    padding: 6px;
+    margin-bottom: 12px;
+}
+.headline-city {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+.headline-today {
+    font-size: 14px;
+    color: #444;
+}
+.headline-condition {
+    font-size: 15px;
+    font-weight: 500;
+    margin-top: 4px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
 
 left, right = st.columns([3, 2])
 with left:
