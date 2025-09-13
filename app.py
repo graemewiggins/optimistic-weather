@@ -22,7 +22,7 @@ st.markdown("""
 /* Generic slim tiles/text */
 .weather-card { text-align:center; font-size:13px; padding:4px; }
 .weather-time { font-weight:600; margin: 2px 0 4px 0; text-align:center; }
-.weather-condition { font-size:14px; }
+.weather-condition { font-size:14px; white-space: normal; line-height:1.2; }
 .weather-temp { font-size:13px; }
 .weather-rain { font-size:12px; color:#555; }
 
@@ -501,6 +501,83 @@ def render_daily_ios(daily_df):
             """, unsafe_allow_html=True
         )
 
+def render_daily_side_by_side_inline(daily_opt: pd.DataFrame, daily_pes: pd.DataFrame):
+    """Side-by-side daily list as two stacked lines per day under a single date label."""
+    if daily_opt.empty and daily_pes.empty:
+        return
+
+    opt_idx = daily_opt.set_index("Date") if not daily_opt.empty else pd.DataFrame().set_index(pd.Index([]))
+    pes_idx = daily_pes.set_index("Date") if not daily_pes.empty else pd.DataFrame().set_index(pd.Index([]))
+    all_dates = sorted(set(opt_idx.index).union(set(pes_idx.index)))[:8]
+
+    for d in all_dates:
+        date_dt = pd.to_datetime(d)
+        day = date_dt.strftime("%a")
+        date_str = date_dt.strftime("%-d/%-m")  # 13/9 format
+
+        # Build line for Optimistic
+        if d in opt_idx.index:
+            ro = opt_idx.loc[d]
+            o_cond = ro.get("Condition") or "—"
+            o_emoji = emoji_for(o_cond)
+            o_hi = "—" if pd.isna(ro.get("High (°C)")) else f"{round(ro['High (°C)'])}°"
+            o_lo = "—" if pd.isna(ro.get("Low (°C)")) else f"{round(ro['Low (°C)'])}°"
+            o_rain = "—" if pd.isna(ro.get("Chance of rain (%)")) else f"{int(round(ro['Chance of rain (%)']))}%"
+            o_cond_src = ro.get("Condition Source") or "—"
+            o_hi_src = ro.get("High Temp Source") or "—"
+            o_lo_src = ro.get("Low Temp Source") or "—"
+            o_rain_src = ro.get("Chance of rain Source") or "—"
+            opt_html = (
+                '<span class="badge" style="margin-right:6px;">Optimistic:</span>'
+                f'<span class="weather-condition" title="Condition source: {o_cond_src}">{o_emoji} {o_cond}</span>'
+                '&nbsp;&nbsp;'
+                f'<span class="weather-temp" title="High source: {o_hi_src}">↑ {o_hi}</span>'
+                ' / '
+                f'<span class="weather-temp" title="Low source: {o_lo_src}">↓ {o_lo}</span>'
+                '&nbsp;&nbsp;'
+                f'<span class="weather-rain" title="Rain source: {o_rain_src}">{o_rain}</span>'
+            )
+        else:
+            opt_html = '<span class="badge">Optimistic:</span> —'
+
+        # Build line for Pessimistic
+        if d in pes_idx.index:
+            rp = pes_idx.loc[d]
+            p_cond = rp.get("Condition") or "—"
+            p_emoji = emoji_for(p_cond)
+            p_hi = "—" if pd.isna(rp.get("High (°C)")) else f"{round(rp['High (°C)'])}°"
+            p_lo = "—" if pd.isna(rp.get("Low (°C)")) else f"{round(rp['Low (°C)'])}°"
+            p_rain = "—" if pd.isna(rp.get("Chance of rain (%)")) else f"{int(round(rp['Chance of rain (%)']))}%"
+            p_cond_src = rp.get("Condition Source") or "—"
+            p_hi_src = rp.get("High Temp Source") or "—"
+            p_lo_src = rp.get("Low Temp Source") or "—"
+            p_rain_src = rp.get("Chance of rain Source") or "—"
+            pes_html = (
+                '<span class="badge" style="margin-right:6px;">Pessimistic:</span>'
+                f'<span class="weather-condition" title="Condition source: {p_cond_src}">{p_emoji} {p_cond}</span>'
+                '&nbsp;&nbsp;'
+                f'<span class="weather-temp" title="High source: {p_hi_src}">↑ {p_hi}</span>'
+                ' / '
+                f'<span class="weather-temp" title="Low source: {p_lo_src}">↓ {p_lo}</span>'
+                '&nbsp;&nbsp;'
+                f'<span class="weather-rain" title="Rain source: {p_rain_src}">{p_rain}</span>'
+            )
+        else:
+            pes_html = '<span class="badge">Pessimistic:</span> —'
+
+        # Render block: date header line + two indented lines
+        block_html = (
+            f'<div class="weather-card" style="text-align:left;">'
+            f'<strong>{day} ({date_str})</strong>'
+            f'<div style="margin-top:2px;">{opt_html}</div>'
+            f'<div style="margin-top:2px;">{pes_html}</div>'
+            f'</div>'
+        )
+        st.markdown(block_html, unsafe_allow_html=True)
+
+
+
+
 # =========================
 # App UI
 # =========================
@@ -590,65 +667,13 @@ if st.button("Get forecast", type="primary"):
         else:
             st.info("No hourly data for today.")
 
-        # Daily — two compact cards per day
-        st.markdown("### Daily — Next 7 Days")
-        if not daily_opt.empty or not daily_pes.empty:
-            opt_idx = daily_opt.set_index("Date") if not daily_opt.empty else pd.DataFrame().set_index(pd.Index([]))
-            pes_idx = daily_pes.set_index("Date") if not daily_pes.empty else pd.DataFrame().set_index(pd.Index([]))
-            all_dates = sorted(set(opt_idx.index).union(set(pes_idx.index)))[:8]
-            for d in all_dates:
-                day = pd.to_datetime(d).strftime("%a")
-                date_str = pd.to_datetime(d).strftime("%-d/%-m")
-                st.markdown(f"**{day} ({date_str})**")
-                colL, colR = st.columns(2)
+# Daily — stacked inline lines per day (matches your example)
+st.markdown("### Daily — Next 7 Days")
+if not daily_opt.empty or not daily_pes.empty:
+    render_daily_side_by_side_inline(daily_opt, daily_pes)
+else:
+    st.info("No daily data available for the selected models.")
 
-                with colL:
-                    if d in opt_idx.index:
-                        r = opt_idx.loc[d]
-                        cond = r.get("Condition") or "—"
-                        hi = "—" if pd.isna(r.get("High (°C)")) else f"{round(r['High (°C)'])}°"
-                        lo = "—" if pd.isna(r.get("Low (°C)")) else f"{round(r['Low (°C)'])}°"
-                        rain = "—" if pd.isna(r.get("Chance of rain (%)")) else f"{int(round(r['Chance of rain (%)']))}%"
-                        st.markdown(
-                            f"""
-                            <div class="weather-card card" style="text-align:left;">
-                              <div class="badge">Optimistic</div>
-                              <div class="weather-condition" title="Condition source: {r.get('Condition Source') or '—'}">
-                                {emoji_for(cond)} {cond}
-                              </div>
-                              <div class="weather-temp">
-                                <span title="High source: {r.get('High Temp Source') or '—'}">↑ {hi}</span> /
-                                <span title="Low source: {r.get('Low Temp Source') or '—'}">↓ {lo}</span>
-                              </div>
-                              <div class="weather-rain" title="Rain source: {r.get('Chance of rain Source') or '—'}">{rain}</div>
-                            </div>
-                            """, unsafe_allow_html=True
-                        )
-
-                with colR:
-                    if d in pes_idx.index:
-                        r = pes_idx.loc[d]
-                        cond = r.get("Condition") or "—"
-                        hi = "—" if pd.isna(r.get("High (°C)")) else f"{round(r['High (°C)'])}°"
-                        lo = "—" if pd.isna(r.get("Low (°C)")) else f"{round(r['Low (°C)'])}°"
-                        rain = "—" if pd.isna(r.get("Chance of rain (%)")) else f"{int(round(r['Chance of rain (%)']))}%"
-                        st.markdown(
-                            f"""
-                            <div class="weather-card card" style="text-align:left;">
-                              <div class="badge">Pessimistic</div>
-                              <div class="weather-condition" title="Condition source: {r.get('Condition Source') or '—'}">
-                                {emoji_for(cond)} {cond}
-                              </div>
-                              <div class="weather-temp">
-                                <span title="High source: {r.get('High Temp Source') or '—'}">↑ {hi}</span> /
-                                <span title="Low source: {r.get('Low Temp Source') or '—'}">↓ {lo}</span>
-                              </div>
-                              <div class="weather-rain" title="Rain source: {r.get('Chance of rain Source') or '—'}">{rain}</div>
-                            </div>
-                            """, unsafe_allow_html=True
-                        )
-        else:
-            st.info("No daily data available for the selected models.")
 
     st.caption("Data via Open-Meteo. Temperatures in °C.")
 else:
