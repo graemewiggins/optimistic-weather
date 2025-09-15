@@ -884,50 +884,15 @@ if st.button("Get forecast", type="primary"):
         # SIDE BY SIDE
         daily_opt = daily_for_mode("Optimistic")
         daily_pes = daily_for_mode("Pessimistic")
-
         render_headline_side_by_side(city, daily_opt, daily_pes)
 
-        # Hourly — stacked opt/pes scroll strip
         st.markdown("### Hourly — Next 24 Hours (Optimistic over Pessimistic)")
         hourly_ss = side_by_side(hourly_rolling, is_hourly=True)
         if not hourly_ss.empty:
             render_hourly_stacked_side_by_side(hourly_ss)
-        else:
-            st.info("No hourly data for today.")
-        
-        # NEW: iOS-style charts with a segmented toggle
-        if not hourly_ss.empty:
-            view = st.radio("Chart view", ["Optimistic", "Pessimistic", "Compare"], horizontal=True, key="ios_chart_view")
-        
+
             st.markdown("### Temperature (iOS style)")
-            if view == "Compare":
-                render_ios_hourly_temp_chart_both(hourly_ss)
-            else:
-                render_ios_hourly_temp_chart(hourly_ss, scenario=view, compare=False)
-        
+            render_ios_hourly_temp_chart_both(hourly_ss)
+
             st.markdown("### Chance of Rain (iOS style)")
-            if view == "Compare":
-                render_ios_hourly_rain_chart_both(hourly_ss)
-            else:
-                render_ios_hourly_rain_chart(hourly_ss, scenario=view, compare=False)
-      
-
-      
-        if not hourly_ss.empty:
-            st.markdown("### Temperature (Optimistic vs Pessimistic)")
-            render_hourly_temp_chart(hourly_ss)
-        if not hourly_ss.empty:
-            st.markdown("### Chance of Rain (Optimistic vs Pessimistic)")
-            render_hourly_rain_chart(hourly_ss)
-    
-
-        # Daily — stacked inline lines per day (your requested format)
-        st.markdown("### Daily — Next 7 Days")
-        if not daily_opt.empty or not daily_pes.empty:
-            render_daily_side_by_side_inline(daily_opt, daily_pes)
-        else:
-            st.info("No daily data available for the selected models.")
-
-    st.caption("Data via Open-Meteo. Temperatures in °C.")
-else:
-    st.info("Enter a location, choose a mode, and click **Get forecast**. 😉")
+            render_ios_hourly_rain_chart_both(hourly_ss)
