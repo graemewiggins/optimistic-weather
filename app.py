@@ -761,114 +761,42 @@ def render_ios_hourly_temp_chart(hourly_ss: pd.DataFrame, scenario: str = "Optim
     st.altair_chart(chart, use_container_width=True)
 
 
-def render_ios_hourly_temp_chart(hourly_ss: pd.DataFrame, scenario: str = "Optimistic", compare: bool = False):
-    """iOS-style hourly temperature chart."""
+def render_ios_hourly_temp_chart_both(hourly_ss: pd.DataFrame):
     if hourly_ss.empty:
         return
-
-    base_df = _build_hourly_series(hourly_ss, scenario)
-    if base_df.empty:
-        return
-
     import altair as alt
-
-    pri_color = OPT_COLOR if scenario == "Optimistic" else PES_COLOR
-    sec_color = PES_COLOR if scenario == "Optimistic" else OPT_COLOR
-    other_scenario = "Pessimistic" if scenario == "Optimistic" else "Optimistic"
-
-    # H/L annotations on primary
-    ann_df = pd.DataFrame()
-    if base_df["Temp"].notna().any():
-        idx_max = base_df["Temp"].idxmax()
-        idx_min = base_df["Temp"].idxmin()
-        ann_df = pd.concat([
-            base_df.loc[[idx_min]].assign(Label="L"),
-            base_df.loc[[idx_max]].assign(Label="H"),
-        ])
-
+    df = hourly_ss[["Time", "Optimistic Temp", "Pessimistic Temp"]].melt(id_vars="Time", var_name="Scenario", value_name="Temp")
+    df["Time"] = pd.to_datetime(df["Time"])
+    color_scale = alt.Scale(domain=["Optimistic Temp", "Pessimistic Temp"], range=[OPT_COLOR, PES_COLOR])
     x_enc = alt.X("Time:T", title="Hour", axis=alt.Axis(format="%H", tickCount=8))
     y_enc = alt.Y("Temp:Q", title="Temperature (°C)", scale=alt.Scale(zero=False), axis=alt.Axis(orient="right"))
-
-    base = alt.Chart(base_df).properties(height=240)
-
-    area   = base.mark_area(opacity=0.25, interpolate="monotone", color=pri_color).encode(x=x_enc, y=y_enc)
-    line   = base.mark_line(interpolate="monotone", strokeWidth=2.5, color=pri_color).encode(x=x_enc, y=y_enc)
-    points = base.mark_point(filled=True, color=pri_color, size=30).encode(x=x_enc, y=y_enc)
-    emoji  = base.mark_text(baseline="bottom", dy=-10, size=10).encode(x=x_enc, y=y_enc, text="Emoji")
-
-    charts = [area, line, points, emoji]
-
-    if not ann_df.empty:
-        anno = alt.Chart(ann_df).mark_text(fontWeight="bold", dy=-16, size=12, color=pri_color).encode(
-            x="Time:T", y="Temp:Q", text="Label"
-        )
-        charts.append(anno)
-
-    if compare:
-        other_df = _build_hourly_series(hourly_ss, other_scenario)
-        if not other_df.empty:
-            overlay = alt.Chart(other_df).mark_line(
-                interpolate="monotone", strokeDash=[5, 4], strokeWidth=2.5, color=sec_color
-            ).encode(x=alt.X("Time:T"), y=alt.Y("Temp:Q"))
-            charts.append(overlay)
-
-    tooltip = base.mark_rule(opacity=0).encode(
-        x=x_enc, y=y_enc,
-        tooltip=[alt.Tooltip("Time:T", title="Time"),
-                 alt.Tooltip("Temp:Q", title=f"{scenario} Temp (°C)", format=".1f"),
-                 alt.Tooltip("Condition:N", title="Condition")]
-    ).interactive()
-    charts.append(tooltip)
-
-    chart = alt.layer(*charts).configure_axis(
-        labelFontSize=11, titleFontSize=12, grid=True, gridOpacity=0.2
-    ).configure_view(stroke=None)
-
+    base = alt.Chart(df).properties(height=240)
+    line = base.mark_line(interpolate="monotone", strokeWidth=2.5).encode(x=x_enc, y=y_enc,
+            color=alt.Color("Scenario:N", title="", scale=color_scale, legend=alt.Legend(orient="top", symbolType="circle")))
+    points = base.mark_point(filled=True, size=30).encode(x=x_enc, y=y_enc,
+            color=alt.Color("Scenario:N", scale=color_scale, legend=None))
+    tooltip = base.mark_rule(opacity=0).encode(x=x_enc, y=y_enc,
+            tooltip=["Time:T","Scenario:N",alt.Tooltip("Temp:Q", title="Temp (°C)", format=".1f")]).interactive()
+    chart = alt.layer(line, points, tooltip).configure_axis(labelFontSize=11, titleFontSize=12, grid=True, gridOpacity=0.2).configure_view(stroke=None)
     st.altair_chart(chart, use_container_width=True)
 
-def render_ios_hourly_rain_chart(hourly_ss: pd.DataFrame, scenario: str = "Optimistic", compare: bool = False):
-    """iOS-style hourly rain chance chart (0–100% axis)."""
+def render_ios_hourly_rain_chart_both(hourly_ss: pd.DataFrame):
     if hourly_ss.empty:
         return
-
-    base_df = _build_hourly_series(hourly_ss, scenario)
-    if base_df.empty:
-        return
-
     import altair as alt
-
-    pri_color = OPT_COLOR if scenario == "Optimistic" else PES_COLOR
-    sec_color = PES_COLOR if scenario == "Optimistic" else OPT_COLOR
-    other_scenario = "Pessimistic" if scenario == "Optimistic" else "Optimistic"
-
+    df = hourly_ss[["Time", "Optimistic Chance of rain", "Pessimistic Chance of rain"]].melt(id_vars="Time", var_name="Scenario", value_name="Rain")
+    df["Time"] = pd.to_datetime(df["Time"])
+    color_scale = alt.Scale(domain=["Optimistic Chance of rain", "Pessimistic Chance of rain"], range=[OPT_COLOR, PES_COLOR])
     x_enc = alt.X("Time:T", title="Hour", axis=alt.Axis(format="%H", tickCount=8))
-    y_enc = alt.Y("Rain:Q", title="Chance of rain (%)", scale=alt.Scale(domain=[0, 100]), axis=alt.Axis(orient="right"))
-
-    base   = alt.Chart(base_df).properties(height=220)
-    line   = base.mark_line(interpolate="monotone", strokeWidth=2.5, color=pri_color).encode(x=x_enc, y=y_enc)
-    points = base.mark_point(filled=True, color=pri_color, size=28).encode(x=x_enc, y=y_enc)
-
-    charts = [line, points]
-
-    if compare:
-        other_df = _build_hourly_series(hourly_ss, other_scenario)
-        if not other_df.empty:
-            overlay = alt.Chart(other_df).mark_line(
-                interpolate="monotone", strokeDash=[5, 4], strokeWidth=2.5, color=sec_color
-            ).encode(x=alt.X("Time:T"), y=alt.Y("Rain:Q"))
-            charts.append(overlay)
-
-    tooltip = base.mark_rule(opacity=0).encode(
-        x=x_enc, y=y_enc,
-        tooltip=[alt.Tooltip("Time:T", title="Time"),
-                 alt.Tooltip("Rain:Q", title=f"{scenario} Rain (%)", format=".0f")]
-    ).interactive()
-    charts.append(tooltip)
-
-    chart = alt.layer(*charts).configure_axis(
-        labelFontSize=11, titleFontSize=12, grid=True, gridOpacity=0.2
-    ).configure_view(stroke=None)
-
+    y_enc = alt.Y("Rain:Q", title="Chance of rain (%)", scale=alt.Scale(domain=[0,100]), axis=alt.Axis(orient="right"))
+    base = alt.Chart(df).properties(height=220)
+    line = base.mark_line(interpolate="monotone", strokeWidth=2.5).encode(x=x_enc, y=y_enc,
+            color=alt.Color("Scenario:N", title="", scale=color_scale, legend=alt.Legend(orient="top", symbolType="circle")))
+    points = base.mark_point(filled=True, size=28).encode(x=x_enc, y=y_enc,
+            color=alt.Color("Scenario:N", scale=color_scale, legend=None))
+    tooltip = base.mark_rule(opacity=0).encode(x=x_enc, y=y_enc,
+            tooltip=["Time:T","Scenario:N",alt.Tooltip("Rain:Q", title="Rain (%)", format=".0f")]).interactive()
+    chart = alt.layer(line, points, tooltip).configure_axis(labelFontSize=11, titleFontSize=12, grid=True, gridOpacity=0.2).configure_view(stroke=None)
     st.altair_chart(chart, use_container_width=True)
 
 
@@ -973,13 +901,13 @@ if st.button("Get forecast", type="primary"):
         
             st.markdown("### Temperature (iOS style)")
             if view == "Compare":
-                render_ios_hourly_temp_chart(hourly_ss, scenario="Optimistic", compare=True)
+                render_ios_hourly_temp_chart_both(hourly_ss)
             else:
                 render_ios_hourly_temp_chart(hourly_ss, scenario=view, compare=False)
         
             st.markdown("### Chance of Rain (iOS style)")
             if view == "Compare":
-                render_ios_hourly_rain_chart(hourly_ss, scenario="Optimistic", compare=True)
+                render_ios_hourly_rain_chart_both(hourly_ss)
             else:
                 render_ios_hourly_rain_chart(hourly_ss, scenario=view, compare=False)
       
