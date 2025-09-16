@@ -790,7 +790,9 @@ def render_ios_hourly_temp_chart(
             tickColor="#3a3a3a",
             domain=False,
             labelPadding=4,
-            grid=False,
+            grid=True,                 
+            gridOpacity=0.15,
+            gridColor="#3a3a3a"
         ),
         scale=alt.Scale(nice=True),
     )
@@ -884,9 +886,15 @@ def render_ios_hourly_temp_chart(
         chart = main_chart
 
     # dark theme
-    chart = chart.configure_view(stroke="#2a2a2a", fill="#111215")\
-                 .configure_axis(grid=False, labelFontSize=11, title=None)\
-                 .configure(background="#111215")
+    chart = chart.configure_view(
+        stroke="#2a2a2a", fill="#111215"
+    ).configure_axisX(
+        grid=False, labelFontSize=11, title=None
+    ).configure_axisY(
+        grid=True, gridOpacity=0.15, gridColor="#3a3a3a", labelFontSize=11, title=None
+    ).configure(
+        background="#111215"
+    )
     return chart
 
 
@@ -934,10 +942,17 @@ if st.button("Get forecast", type="primary"):
     # Prepare datasets
     # Build a rolling 24h window in the location's timezone
     # (Open-Meteo returned times are already in that tz because we requested timezone=tz)
-    start = pd.Timestamp.now(tz).floor("H").tz_localize(None)   # current local hour (naive, same tz as data)
+    start = pd.Timestamp.now(tz).floor("H").tz_localize(None)
     end = start + pd.Timedelta(hours=23)
     hourly_rolling = hourly_all[(hourly_all["time"] >= start) & (hourly_all["time"] <= end)].copy()
     
+    full 00:00–24:00 window for TODAY (local tz, naive)
+    day_start = pd.Timestamp.now(tz).normalize().tz_localize(None)
+    day_end   = day_start + pd.Timedelta(days=1)
+    hourly_today = hourly_all[(hourly_all["time"] >= day_start) & (hourly_all["time"] < day_end)].copy()
+
+
+  
     today = datetime.now().date()
     daily_future = daily_all[daily_all["date"] >= today].copy()
 
@@ -962,7 +977,7 @@ if st.button("Get forecast", type="primary"):
         if not hours.empty:
             render_hourly_ios(hours)
             # iOS-style temperature chart (pessimistic solid + optimistic dashed)
-            hourly_ss = side_by_side(hourly_rolling, is_hourly=True)
+            hourly_ss = side_by_side(hourly_today, is_hourly=True)
             ios_df = prepare_ios_hourly_df_from_ss(hourly_ss, tz=tz)
             st.markdown("### Temperature — iOS style")
             st.altair_chart(render_ios_hourly_temp_chart(ios_df, tz=tz), use_container_width=True)
@@ -988,6 +1003,6 @@ if st.button("Get forecast", type="primary"):
             render_hourly_stacked_side_by_side(hourly_ss)
 
             st.markdown("### Temperature — iOS style")
-            ios_df = prepare_ios_hourly_df_from_ss(hourly_ss, tz=tz)
+            ios_df = prepare_ios_hourly_df_from_ss(hourly_today, tz=tz)
             st.altair_chart(render_ios_hourly_temp_chart(ios_df, tz=tz), use_container_width=True)
 
