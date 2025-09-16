@@ -738,7 +738,8 @@ def render_ios_hourly_temp_chart(
     # keep only today's 24h window (naive)
     d = d[(d["ts"] >= start_of_day) & (d["ts"] < end_of_day)].copy()
     if d.empty:
-        return chart  # nothing for today; bail out gracefully
+        return alt.Chart(pd.DataFrame({"x": [], "y": []})).mark_text().properties(height=main_height)
+
 
     # --- Ensure an hourly grid for TODAY, but only fill gaps AFTER 'now' ---
     full_hours = pd.date_range(start=start_of_day, end=end_of_day, freq="H", inclusive="left")
@@ -749,35 +750,15 @@ def render_ios_hourly_temp_chart(
     future_mask = d["ts"] > now_local
     filled = d.copy()
     for col in ["temp_pess", "temp_opt"]:
-        # create candidates by time interpolation and padding
-        filled[col] = filled[col].interpolate(method="time", limit_direction="both").ffill().bfill()
-        # write back only into future rows
+        filled[col] = filled[col].interpolate(limit_direction="both").ffill().bfill()
         d.loc[future_mask, col] = filled.loc[future_mask, col]
+
     
     # split past/future using floored 'now'
     past   = d[d["ts"] <= now_local]
     future = d[d["ts"] >  now_local]
 
 
-    # --- NEW: ensure an hourly grid and fill missing temps ---
-    # reindex to every hour today and interpolate
-    full_hours = pd.date_range(start=start_of_day, end=end_of_day, freq="H", inclusive="left")
-    d = (
-        d.set_index("ts")
-         .reindex(full_hours)
-         .rename_axis("ts")
-         .sort_index()
-    )
-    # interpolate where possible, then pad any remaining leading/trailing NaNs
-    for col in ["temp_pess", "temp_opt"]:
-        d[col] = d[col].interpolate(limit_direction="both")
-        d[col] = d[col].ffill().bfill()
-    
-    d = d.reset_index().rename(columns={"index": "ts"})
-  
-    # split past/future using naive timestamps
-    past = d[d["ts"] <= now_local]
-    future = d[d["ts"] > now_local]
 
     # find H/L on pessimistic (guard if empty/NaN)
     if d["temp_pess"].notna().any():
@@ -802,7 +783,7 @@ def render_ios_hourly_temp_chart(
             values=tick_times,
             labelExpr="timeFormat(datum.value, '%H')",
             labelColor="#d6d6d6",
-            tickColor="#3a3a3a",
+            tickColor="#bfbfbf",
             tickSize=4,
             labelPadding=8,
             grid=False,
