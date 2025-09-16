@@ -1,7 +1,7 @@
 # app.py
 import math
-from datetime import datetime, timezone
-
+from datetime import datetime, timezone, timedelta
+import pytz
 import pandas as pd
 import requests
 import streamlit as st
@@ -662,142 +662,200 @@ def render_hourly_rain_chart(hourly_ss: pd.DataFrame):
     )
     st.altair_chart(chart, use_container_width=True)
 
+# ========= iOS-style Hourly Temperature Chart (new) =========
+import altair as alt
+import pandas as pd
+import pytz
+from datetime import datetime, timedelta
 
-# ---------- iOS-style hourly charts ----------
-OPT_COLOR = "#F2C94C"  # warm yellow
-PES_COLOR = "#2F80ED"  # cool blue
-
-def _build_hourly_series(hourly_ss: pd.DataFrame, scenario: str) -> pd.DataFrame:
-    """Return a tidy df for one scenario: Time, Temp, Rain, Condition, Emoji."""
-    if hourly_ss.empty:
-        return pd.DataFrame()
-
-    # columns vary by scenario
-    tcol = f"{scenario} Temp"
-    rcol = f"{scenario} Chance of rain"
-    ccol = f"{scenario} Condition"
-
-    df = hourly_ss[["Time", tcol, rcol, ccol]].copy()
-    df.rename(columns={tcol: "Temp", rcol: "Rain", ccol: "Condition"}, inplace=True)
-    df["Time"] = pd.to_datetime(df["Time"])
-    # map to emoji (you already have emoji_for)
-    df["Emoji"] = df["Condition"].apply(lambda x: emoji_for(x or "Unknown"))
-    return df.sort_values("Time").reset_index(drop=True)
-
-
-def render_ios_hourly_temp_chart(hourly_ss: pd.DataFrame, scenario: str = "Optimistic", compare: bool = False):
-    """iOS-style hourly temperature chart.
-       - scenario: 'Optimistic' or 'Pessimistic'
-       - compare: if True, overlay the other scenario as dashed line (no area)
+def prepare_ios_hourly_df_from_ss(hourly_ss: pd.DataFrame, *, tz: str) -> pd.DataFrame:
     """
-    import altair as alt
-    if hourly_ss.empty:
-        return
+    Build the input for the iOS-style chart from your side_by_side() hourly table.
 
-    base_df = _build_hourly_series(hourly_ss, scenario)
-    if base_df.empty:
-        return
+    Returns columns:
+      ts (tz-aware), temp_pess, temp_opt, icon_url (optional; left empty here)
+    """
+    if hourly_ss is None or hourly_ss.empty:
+        return pd.DataFrame(columns=["ts", "temp_pess", "temp_opt", "icon_url"])
 
-    # which color is primary?
-    pri_color = OPT_COLOR if scenario == "Optimistic" else PES_COLOR
-    sec_color = PES_COLOR if scenario == "Optimistic" else OPT_COLOR
-    other_scenario = "Pessimistic" if scenario == "Optimistic" else "Optimistic"
+    df = hourly_ss.copy()
+    tzinfo = pytz.timezone(tz)
 
-    # For H/L annotations on the primary series
-    idx_max = base_df["Temp"].idxmax() if base_df["Temp"].notna().any() else None
-    idx_min = base_df["Temp"].idxmin() if base_df["Temp"].notna().any() else None
-    ann_df = pd.DataFrame()
-    if idx_max is not None and idx_min is not None:
-        ann_df = pd.concat([
-            base_df.loc[[idx_min]].assign(Label="L"),
-            base_df.loc[[idx_max]].assign(Label="H"),
-        ])
+    # Ensure timestamp
+    df["ts"] = pd.to_datetime(df["Time"], errors="coerce")
+    # Treat as local tz (Open-Meteo already returned local tz earlier)
+    if df["ts"].dt.tz is None:
+        df["ts"] = df["ts"].dt.tz_localize(tzinfo)
+    else:
+        df["ts"] = df["ts"].dt.tz_convert(tzinfo)
 
-    # Base encodings (right-side Y axis, dynamic range)
-    x_enc = alt.X("Time:T", title="Hour", axis=alt.Axis(format="%H", tickCount=8))
-    y_enc = alt.Y("Temp:Q", title="Temperature (°C)", scale=alt.Scale(zero=False), axis=alt.Axis(orient="right"))
+    # Temperatures
+    df["temp_pess"] = pd.to_numeric(df["Pessimistic Temp"], errors="coerce")
+    df["temp_opt"]  = pd.to_numeric(df["Optimistic Temp"], errors="coerce")
 
-    chart_base = alt.Chart(base_df).properties(height=240)
+    # No icon URLs yet (you can wire later if you have an assets set)
+    df["icon_url"] = pd.NA
 
-    # Area fill under the primary line (simple translucent fill for mobile perf)
-    area = chart_base.mark_area(opacity=0.25, interpolate="monotone", color=pri_color).encode(x=x_enc, y=y_enc)
+    return df[["ts", "temp_pess", "temp_opt", "icon_url"]].dropna(subset=["ts"])
 
-    # Primary smooth line + points
-    line = chart_base.mark_line(interpolate="monotone", strokeWidth=2.5, color=pri_color).encode(x=x_enc, y=y_enc)
-    points = chart_base.mark_point(filled=True, color=pri_color, size=30).encode(x=x_enc, y=y_enc)
 
-    # Tiny emoji above each hour (primary scenario’s emoji)
-    emoji = chart_base.mark_text(baseline="bottom", dy=-10, size=10).encode(
-        x=x_enc, y=y_enc, text="Emoji"
+def render_ios_hourly_temp_chart(
+    df: pd.DataFrame,
+    *,
+    tz: str = "Europe/London",
+    width: int | None = None,
+    main_height: int = 180,
+    icons_height: int = 28,
+):
+    """
+    Expect df with columns:
+      - ts (datetime64[ns, tz-aware]) : x-axis
+      - temp_pess (float)             : solid smoothed line + gradient area
+      - temp_opt (float)              : dashed comparison
+      - icon_url (optional str)       : top row images every 2 hours (not required)
+    """
+    if df is None or df.empty:
+        return alt.Chart(pd.DataFrame({"x": [], "y": []})).mark_text().properties(height=main_height)
+
+    tzinfo = pytz.timezone(tz)
+    now_local = datetime.now(tzinfo)
+    start_of_day = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_day = start_of_day + timedelta(days=1)
+
+    d = df.copy().sort_values("ts")
+    # keep only today's 24h window
+    d = d[(d["ts"] >= start_of_day) & (d["ts"] < end_of_day)].copy()
+    if d.empty:
+        d = df.copy().sort_values("ts")
+
+    # split past/future for tone + shading
+    past = d[d["ts"] <= now_local]
+    future = d[d["ts"] > now_local]
+
+    # find H/L on pessimistic
+    low_idx = d["temp_pess"].idxmin()
+    high_idx = d["temp_pess"].idxmax()
+    marks_df = pd.DataFrame(
+        [
+            {"ts": d.loc[low_idx, "ts"], "temp": d.loc[low_idx, "temp_pess"], "label": "L"},
+            {"ts": d.loc[high_idx, "ts"], "temp": d.loc[high_idx, "temp_pess"], "label": "H"},
+        ]
     )
 
-    # H/L annotations
-    anno = alt.Chart(ann_df).mark_text(fontWeight="bold", dy=-16, size=12, color=pri_color).encode(
-        x="Time:T", y="Temp:Q", text="Label"
-    ) if not ann_df.empty else alt.Layer()
+    # axes encodings (right-side Y), x ticks at 00/06/12/18
+    x_enc = alt.X(
+        "ts:T",
+        title=None,
+        scale=alt.Scale(domain=[start_of_day, end_of_day]),
+        axis=alt.Axis(
+            values=[start_of_day + timedelta(hours=h) for h in (0, 6, 12, 18)],
+            labelExpr="timeFormat(datum.value, '%H')",
+            labelColor="#d6d6d6",
+            tickColor="#3a3a3a",
+            tickSize=4,
+            labelPadding=8,
+            grid=False,
+        ),
+    )
+    y_right = alt.Y(
+        "temp_pess:Q",
+        title=None,
+        axis=alt.Axis(
+            orient="right",
+            labelColor="#d6d6d6",
+            tickColor="#3a3a3a",
+            domain=False,
+            labelPadding=4,
+            grid=False,
+        ),
+        scale=alt.Scale(nice=True),
+    )
 
-    # Tooltip layer
-    tooltip = chart_base.mark_rule(opacity=0).encode(
-        x=x_enc,
-        y=y_enc,
-        tooltip=[alt.Tooltip("Time:T", title="Time"),
-                 alt.Tooltip("Temp:Q", title=f"{scenario} Temp (°C)", format=".1f"),
-                 alt.Tooltip("Condition:N", title="Condition")]
-    ).interactive()
+    # vertical gridlines (00/06/12/18) and current hour
+    six_hr_rules = (
+        alt.Chart(pd.DataFrame({"ts": [start_of_day + timedelta(hours=h) for h in (0, 6, 12, 18)]}))
+        .mark_rule(stroke="#7a7a7a", strokeOpacity=0.25, strokeWidth=1)
+        .encode(x="ts:T")
+    )
+    now_rule = (
+        alt.Chart(pd.DataFrame({"ts": [now_local]}))
+        .mark_rule(stroke="#cfcfcf", strokeOpacity=0.6, strokeWidth=1)
+        .encode(x="ts:T")
+    )
 
-    # Optional compare overlay (line only, dashed)
-    overlay = alt.Layer()
-    if compare:
-        other_df = _build_hourly_series(hourly_ss, other_scenario)
-        if not other_df.empty:
-            overlay = alt.Chart(other_df).mark_line(
-                interpolate="monotone", strokeDash=[5,4], strokeWidth=2.5, color=sec_color
-            ).encode(x=alt.X("Time:T"), y=alt.Y("Temp:Q"))
+    # past panel shading
+    past_rect = (
+        alt.Chart(pd.DataFrame({"x0": [start_of_day], "x1": [min(now_local, end_of_day)]}))
+        .mark_rect(opacity=0.25, color="#0b0c0e")
+        .encode(x="x0:T", x2="x1:T")
+    )
 
-    chart = (area + line + points + emoji + anno + overlay + tooltip).configure_axis(
-        labelFontSize=11, titleFontSize=12, grid=True, gridOpacity=0.2
-    ).configure_view(stroke=None)
+    # gradient fills (future brighter, past darker)
+    grad_future = alt.Gradient(
+        gradient="linear", x1=0, x2=0, y1=1, y2=0,
+        stops=[alt.GradientStop(color="#0a7b8c", offset=0), alt.GradientStop(color="#f3e766", offset=1)],
+    )
+    grad_past = alt.Gradient(
+        gradient="linear", x1=0, x2=0, y1=1, y2=0,
+        stops=[alt.GradientStop(color="#075d69", offset=0), alt.GradientStop(color="#c7bc4f", offset=1)],
+    )
 
-    st.altair_chart(chart, use_container_width=True)
+    area_future = alt.Chart(future).mark_area(interpolate="monotone", opacity=0.8, color=grad_future)\
+        .encode(x=x_enc, y=y_right)
+    area_past = alt.Chart(past).mark_area(interpolate="monotone", opacity=0.8, color=grad_past)\
+        .encode(x=x_enc, y=y_right)
 
+    # pessimistic line (solid), darker in past
+    line_future = alt.Chart(future).mark_line(interpolate="monotone", strokeWidth=2.5, color="#f3e766")\
+        .encode(x=x_enc, y="temp_pess:Q")
+    line_past = alt.Chart(past).mark_line(interpolate="monotone", strokeWidth=2.5, color="#c7bc4f")\
+        .encode(x=x_enc, y="temp_pess:Q")
 
-def render_ios_hourly_temp_chart_both(hourly_ss: pd.DataFrame):
-    if hourly_ss.empty:
-        return
-    import altair as alt
-    df = hourly_ss[["Time", "Optimistic Temp", "Pessimistic Temp"]].melt(id_vars="Time", var_name="Scenario", value_name="Temp")
-    df["Time"] = pd.to_datetime(df["Time"])
-    color_scale = alt.Scale(domain=["Optimistic Temp", "Pessimistic Temp"], range=[OPT_COLOR, PES_COLOR])
-    x_enc = alt.X("Time:T", title="Hour", axis=alt.Axis(format="%H", tickCount=8))
-    y_enc = alt.Y("Temp:Q", title="Temperature (°C)", scale=alt.Scale(zero=False), axis=alt.Axis(orient="right"))
-    base = alt.Chart(df).properties(height=240)
-    line = base.mark_line(interpolate="monotone", strokeWidth=2.5).encode(x=x_enc, y=y_enc,
-            color=alt.Color("Scenario:N", title="", scale=color_scale, legend=alt.Legend(orient="top", symbolType="circle")))
-    points = base.mark_point(filled=True, size=30).encode(x=x_enc, y=y_enc,
-            color=alt.Color("Scenario:N", scale=color_scale, legend=None))
-    tooltip = base.mark_rule(opacity=0).encode(x=x_enc, y=y_enc,
-            tooltip=["Time:T","Scenario:N",alt.Tooltip("Temp:Q", title="Temp (°C)", format=".1f")]).interactive()
-    chart = alt.layer(line, points, tooltip).configure_axis(labelFontSize=11, titleFontSize=12, grid=True, gridOpacity=0.2).configure_view(stroke=None)
-    st.altair_chart(chart, use_container_width=True)
+    # optimistic comparison (dashed), tone split
+    opt_future = alt.Chart(future).mark_line(interpolate="monotone", strokeWidth=2, color="#f3e766",
+                                             strokeDash=[5, 4], opacity=0.9)\
+        .encode(x=x_enc, y="temp_opt:Q")
+    opt_past = alt.Chart(past).mark_line(interpolate="monotone", strokeWidth=2, color="#c7bc4f",
+                                         strokeDash=[5, 4], opacity=0.9)\
+        .encode(x=x_enc, y="temp_opt:Q")
 
-def render_ios_hourly_rain_chart_both(hourly_ss: pd.DataFrame):
-    if hourly_ss.empty:
-        return
-    import altair as alt
-    df = hourly_ss[["Time", "Optimistic Chance of rain", "Pessimistic Chance of rain"]].melt(id_vars="Time", var_name="Scenario", value_name="Rain")
-    df["Time"] = pd.to_datetime(df["Time"])
-    color_scale = alt.Scale(domain=["Optimistic Chance of rain", "Pessimistic Chance of rain"], range=[OPT_COLOR, PES_COLOR])
-    x_enc = alt.X("Time:T", title="Hour", axis=alt.Axis(format="%H", tickCount=8))
-    y_enc = alt.Y("Rain:Q", title="Chance of rain (%)", scale=alt.Scale(domain=[0,100]), axis=alt.Axis(orient="right"))
-    base = alt.Chart(df).properties(height=220)
-    line = base.mark_line(interpolate="monotone", strokeWidth=2.5).encode(x=x_enc, y=y_enc,
-            color=alt.Color("Scenario:N", title="", scale=color_scale, legend=alt.Legend(orient="top", symbolType="circle")))
-    points = base.mark_point(filled=True, size=28).encode(x=x_enc, y=y_enc,
-            color=alt.Color("Scenario:N", scale=color_scale, legend=None))
-    tooltip = base.mark_rule(opacity=0).encode(x=x_enc, y=y_enc,
-            tooltip=["Time:T","Scenario:N",alt.Tooltip("Rain:Q", title="Rain (%)", format=".0f")]).interactive()
-    chart = alt.layer(line, points, tooltip).configure_axis(labelFontSize=11, titleFontSize=12, grid=True, gridOpacity=0.2).configure_view(stroke=None)
-    st.altair_chart(chart, use_container_width=True)
+    # H/L markers
+    hl_points = alt.Chart(marks_df).mark_point(size=70, filled=True, color="#0d0d0d",
+                                               stroke="#f6f6f6", strokeWidth=1.5)\
+        .encode(x="ts:T", y="temp:Q")
+    hl_rings = alt.Chart(marks_df).mark_point(size=130, filled=False, stroke="#f6f6f6", strokeWidth=1.2)\
+        .encode(x="ts:T", y="temp:Q")
+    hl_labels = alt.Chart(marks_df).mark_text(align="center", baseline="bottom", dy=-10, fontSize=12,
+                                              color="#f6f6f6", fontWeight="bold")\
+        .encode(x="ts:T", y="temp:Q", text="label:N")
+
+    main_chart = alt.layer(
+        past_rect, six_hr_rules, now_rule,
+        area_past, area_future,
+        line_past, line_future,
+        opt_past, opt_future,
+        hl_points, hl_rings, hl_labels
+    ).properties(height=main_height, width=width)
+
+    # icon row every 2h (only if icon_url present)
+    icons = d.copy()
+    icons["hour"] = icons["ts"].dt.hour
+    icons = icons[(icons["hour"] % 2 == 0) & icons["icon_url"].notna()]
+    if not icons.empty:
+        icon_chart = alt.Chart(icons).mark_image(width=18, height=18).encode(x=x_enc, url="icon_url:N")\
+            .properties(height=icons_height, width=width)
+        divider = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(stroke="#7a7a7a", strokeOpacity=0.25)\
+            .encode(y=alt.value(icons_height-1))
+        top = alt.layer(icon_chart, divider).resolve_scale(y="independent")
+        chart = alt.vconcat(top, main_chart).resolve_scale(x="shared")
+    else:
+        chart = main_chart
+
+    # dark theme
+    chart = chart.configure_view(stroke="#2a2a2a", fill="#111215")\
+                 .configure_axis(grid=False, labelFontSize=11, title=None)\
+                 .configure(background="#111215")
+    return chart
 
 
 # =========================
@@ -870,6 +928,11 @@ if st.button("Get forecast", type="primary"):
         hours = hourly_for_mode(mode)
         if not hours.empty:
             render_hourly_ios(hours)
+            # iOS-style temperature chart (pessimistic solid + optimistic dashed)
+            hourly_ss = side_by_side(hourly_rolling, is_hourly=True)
+            ios_df = prepare_ios_hourly_df_from_ss(hourly_ss, tz=tz)
+            st.markdown("### Temperature — iOS style")
+            st.altair_chart(render_ios_hourly_temp_chart(ios_df, tz=tz), use_container_width=True)
         else:
             st.info("No hourly data for today.")
 
@@ -891,8 +954,7 @@ if st.button("Get forecast", type="primary"):
         if not hourly_ss.empty:
             render_hourly_stacked_side_by_side(hourly_ss)
 
-            st.markdown("### Temperature (iOS style)")
-            render_ios_hourly_temp_chart_both(hourly_ss)
+            st.markdown("### Temperature — iOS style")
+            ios_df = prepare_ios_hourly_df_from_ss(hourly_ss, tz=tz)
+            st.altair_chart(render_ios_hourly_temp_chart(ios_df, tz=tz), use_container_width=True)
 
-            st.markdown("### Chance of Rain (iOS style)")
-            render_ios_hourly_rain_chart_both(hourly_ss)
