@@ -748,6 +748,22 @@ def render_ios_hourly_temp_chart(
         d["ts"] = ts.dt.tz_localize(None)
         d = d.sort_values("ts")
 
+    # --- NEW: ensure an hourly grid and fill missing temps ---
+    # reindex to every hour today and interpolate
+    full_hours = pd.date_range(start=start_of_day, end=end_of_day, freq="H", inclusive="left")
+    d = (
+        d.set_index("ts")
+         .reindex(full_hours)
+         .rename_axis("ts")
+         .sort_index()
+    )
+    # interpolate where possible, then pad any remaining leading/trailing NaNs
+    for col in ["temp_pess", "temp_opt"]:
+        d[col] = d[col].interpolate(limit_direction="both")
+        d[col] = d[col].ffill().bfill()
+    
+    d = d.reset_index().rename(columns={"index": "ts"})
+  
     # split past/future using naive timestamps
     past = d[d["ts"] <= now_local]
     future = d[d["ts"] > now_local]
