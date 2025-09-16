@@ -978,11 +978,15 @@ if st.button("Get forecast", type="primary"):
             render_hourly_ios(hours)
             # iOS-style temperature chart (pessimistic solid + optimistic dashed)
             hourly_ss = side_by_side(hourly_today, is_hourly=True)
-            ios_df = prepare_ios_hourly_df_from_ss(hourly_ss, tz=tz)
-            st.markdown("### Temperature — iOS style")
-            st.altair_chart(render_ios_hourly_temp_chart(ios_df, tz=tz), use_container_width=True)
-        else:
-            st.info("No hourly data for today.")
+            # Build “today” SS table first
+            hourly_ss_today = side_by_side(hourly_today, is_hourly=True)
+            if not hourly_ss_today.empty:
+                ios_df = prepare_ios_hourly_df_from_ss(hourly_ss_today, tz=tz)
+                st.markdown("### Temperature — iOS style")
+                st.altair_chart(render_ios_hourly_temp_chart(ios_df, tz=tz), use_container_width=True)
+            else:
+                st.info("No hourly data for today (side-by-side).")
+
 
         # Daily — vertical list
         st.markdown("### Daily — Next 7 Days")
