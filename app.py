@@ -787,12 +787,12 @@ def render_ios_hourly_temp_chart(
         axis=alt.Axis(
             orient="right",
             labelColor="#d6d6d6",
-            tickColor="#3a3a3a",
+            tickColor="#bfbfbf",
             domain=False,
             labelPadding=4,
             grid=True,                 
-            gridOpacity=0.15,
-            gridColor="#3a3a3a"
+            gridOpacity=0.4,
+            gridColor="#bfbfbf"
         ),
         scale=alt.Scale(nice=True),
     )
@@ -800,7 +800,7 @@ def render_ios_hourly_temp_chart(
     # vertical gridlines (00/06/12/18) and current hour (all naive)
     six_hr_rules = (
         alt.Chart(pd.DataFrame({"ts": tick_times}))
-        .mark_rule(stroke="#7a7a7a", strokeOpacity=0.25, strokeWidth=1)
+        .mark_rule(stroke="#bfbfbf", strokeOpacity=0.4, strokeWidth=1)
         .encode(x="ts:T")
     )
     now_rule = (
