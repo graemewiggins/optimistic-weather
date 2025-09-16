@@ -861,7 +861,10 @@ def render_ios_hourly_temp_chart(
             .encode(x="ts:T", y="temp:Q", text="label:N")
         main_layers.extend([hl_points, hl_rings, hl_labels])
 
-    main_chart = alt.layer(*main_layers).properties(height=main_height, width=width)
+    main_chart = alt.layer(*main_layers).properties(height=main_height)
+    if width is not None:
+        main_chart = main_chart.properties(width=width)
+
 
     # icon row every 2h (only if icon_url present)
     icons = d.copy()
@@ -869,7 +872,10 @@ def render_ios_hourly_temp_chart(
     icons = icons[(icons["hour"] % 2 == 0) & icons["icon_url"].notna()]
     if not icons.empty:
         icon_chart = alt.Chart(icons).mark_image(width=18, height=18).encode(x=x_enc, url="icon_url:N")\
-            .properties(height=icons_height, width=width)
+            .properties(height=icons_height)
+        if width is not None:
+            icon_chart = icon_chart.properties(width=width)
+
         divider = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(stroke="#7a7a7a", strokeOpacity=0.25)\
             .encode(y=alt.value(icons_height-1))
         top = alt.layer(icon_chart, divider).resolve_scale(y="independent")
