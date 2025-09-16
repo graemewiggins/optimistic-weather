@@ -709,46 +709,70 @@ def render_ios_hourly_temp_chart(
 ):
     """
     Expect df with columns:
-      - ts (datetime64[ns, tz-aware]) : x-axis
-      - temp_pess (float)             : solid smoothed line + gradient area
-      - temp_opt (float)              : dashed comparison
-      - icon_url (optional str)       : top row images every 2 hours (not required)
+      - ts (datetime64[ns], tz-aware or naive)
+      - temp_pess (float)
+      - temp_opt (float)
+      - icon_url (optional str)
     """
     if df is None or df.empty:
         return alt.Chart(pd.DataFrame({"x": [], "y": []})).mark_text().properties(height=main_height)
 
     tzinfo = pytz.timezone(tz)
-    now_local = datetime.now(tzinfo)
+
+    # --- Ensure timestamps are in local tz, then make them NAIVE (no tzinfo) for Altair/Vega-Lite
+    d = df.copy()
+    ts = pd.to_datetime(d["ts"], errors="coerce")
+    if ts.dt.tz is None:
+        ts = ts.dt.tz_localize(tzinfo)     # assume local tz if none
+    else:
+        ts = ts.dt.tz_convert(tzinfo)      # convert to local tz if aware
+    d["ts"] = ts.dt.tz_localize(None)      # <-- make naive for Vega-Lite
+
+    # --- Use naive "now" and day window corresponding to local tz
+    now_local = datetime.now(tzinfo).replace(tzinfo=None)
     start_of_day = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
     end_of_day = start_of_day + timedelta(days=1)
 
-    d = df.copy().sort_values("ts")
-    # keep only today's 24h window
+    d = d.sort_values("ts")
+
+    # keep only today's 24h window (naive)
     d = d[(d["ts"] >= start_of_day) & (d["ts"] < end_of_day)].copy()
     if d.empty:
-        d = df.copy().sort_values("ts")
+        # fallback: use all provided rows, but still naive/locally aligned
+        d = df.copy()
+        ts = pd.to_datetime(d["ts"], errors="coerce")
+        if ts.dt.tz is None:
+            ts = ts.dt.tz_localize(tzinfo)
+        else:
+            ts = ts.dt.tz_convert(tzinfo)
+        d["ts"] = ts.dt.tz_localize(None)
+        d = d.sort_values("ts")
 
-    # split past/future for tone + shading
+    # split past/future using naive timestamps
     past = d[d["ts"] <= now_local]
     future = d[d["ts"] > now_local]
 
-    # find H/L on pessimistic
-    low_idx = d["temp_pess"].idxmin()
-    high_idx = d["temp_pess"].idxmax()
-    marks_df = pd.DataFrame(
-        [
-            {"ts": d.loc[low_idx, "ts"], "temp": d.loc[low_idx, "temp_pess"], "label": "L"},
-            {"ts": d.loc[high_idx, "ts"], "temp": d.loc[high_idx, "temp_pess"], "label": "H"},
-        ]
-    )
+    # find H/L on pessimistic (guard if empty/NaN)
+    if d["temp_pess"].notna().any():
+        low_idx = d["temp_pess"].idxmin()
+        high_idx = d["temp_pess"].idxmax()
+        marks_df = pd.DataFrame(
+            [
+                {"ts": d.loc[low_idx, "ts"], "temp": d.loc[low_idx, "temp_pess"], "label": "L"},
+                {"ts": d.loc[high_idx, "ts"], "temp": d.loc[high_idx, "temp_pess"], "label": "H"},
+            ]
+        )
+    else:
+        marks_df = pd.DataFrame(columns=["ts", "temp", "label"])
 
     # axes encodings (right-side Y), x ticks at 00/06/12/18
+    tick_times = [start_of_day + timedelta(hours=h) for h in (0, 6, 12, 18)]
     x_enc = alt.X(
         "ts:T",
         title=None,
         scale=alt.Scale(domain=[start_of_day, end_of_day]),
         axis=alt.Axis(
-            values=[start_of_day + timedelta(hours=h) for h in (0, 6, 12, 18)],
+            values=tick_times,
             labelExpr="timeFormat(datum.value, '%H')",
             labelColor="#d6d6d6",
             tickColor="#3a3a3a",
@@ -771,9 +795,9 @@ def render_ios_hourly_temp_chart(
         scale=alt.Scale(nice=True),
     )
 
-    # vertical gridlines (00/06/12/18) and current hour
+    # vertical gridlines (00/06/12/18) and current hour (all naive)
     six_hr_rules = (
-        alt.Chart(pd.DataFrame({"ts": [start_of_day + timedelta(hours=h) for h in (0, 6, 12, 18)]}))
+        alt.Chart(pd.DataFrame({"ts": tick_times}))
         .mark_rule(stroke="#7a7a7a", strokeOpacity=0.25, strokeWidth=1)
         .encode(x="ts:T")
     )
@@ -783,7 +807,7 @@ def render_ios_hourly_temp_chart(
         .encode(x="ts:T")
     )
 
-    # past panel shading
+    # past panel shading (naive domain)
     past_rect = (
         alt.Chart(pd.DataFrame({"x0": [start_of_day], "x1": [min(now_local, end_of_day)]}))
         .mark_rect(opacity=0.25, color="#0b0c0e")
@@ -819,23 +843,25 @@ def render_ios_hourly_temp_chart(
                                          strokeDash=[5, 4], opacity=0.9)\
         .encode(x=x_enc, y="temp_opt:Q")
 
-    # H/L markers
-    hl_points = alt.Chart(marks_df).mark_point(size=70, filled=True, color="#0d0d0d",
-                                               stroke="#f6f6f6", strokeWidth=1.5)\
-        .encode(x="ts:T", y="temp:Q")
-    hl_rings = alt.Chart(marks_df).mark_point(size=130, filled=False, stroke="#f6f6f6", strokeWidth=1.2)\
-        .encode(x="ts:T", y="temp:Q")
-    hl_labels = alt.Chart(marks_df).mark_text(align="center", baseline="bottom", dy=-10, fontSize=12,
-                                              color="#f6f6f6", fontWeight="bold")\
-        .encode(x="ts:T", y="temp:Q", text="label:N")
-
-    main_chart = alt.layer(
+    # H/L markers (only if we had valid temps)
+    main_layers = [
         past_rect, six_hr_rules, now_rule,
         area_past, area_future,
         line_past, line_future,
         opt_past, opt_future,
-        hl_points, hl_rings, hl_labels
-    ).properties(height=main_height, width=width)
+    ]
+    if not marks_df.empty:
+        hl_points = alt.Chart(marks_df).mark_point(size=70, filled=True, color="#0d0d0d",
+                                                   stroke="#f6f6f6", strokeWidth=1.5)\
+            .encode(x="ts:T", y="temp:Q")
+        hl_rings = alt.Chart(marks_df).mark_point(size=130, filled=False, stroke="#f6f6f6", strokeWidth=1.2)\
+            .encode(x="ts:T", y="temp:Q")
+        hl_labels = alt.Chart(marks_df).mark_text(align="center", baseline="bottom", dy=-10, fontSize=12,
+                                                  color="#f6f6f6", fontWeight="bold")\
+            .encode(x="ts:T", y="temp:Q", text="label:N")
+        main_layers.extend([hl_points, hl_rings, hl_labels])
+
+    main_chart = alt.layer(*main_layers).properties(height=main_height, width=width)
 
     # icon row every 2h (only if icon_url present)
     icons = d.copy()
@@ -856,6 +882,7 @@ def render_ios_hourly_temp_chart(
                  .configure_axis(grid=False, labelFontSize=11, title=None)\
                  .configure(background="#111215")
     return chart
+
 
 
 # =========================
