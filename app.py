@@ -728,25 +728,36 @@ def render_ios_hourly_temp_chart(
         ts = ts.dt.tz_convert(tzinfo)      # convert to local tz if aware
     d["ts"] = ts.dt.tz_localize(None)      # <-- make naive for Vega-Lite
 
-    # --- Use naive "now" and day window corresponding to local tz
-    now_local = datetime.now(tzinfo).replace(tzinfo=None)
-    start_of_day = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_of_day = start_of_day + timedelta(days=1)
-
+    # --- Use naive "now" (FLOORED to the hour) and TODAY window ---
+    now_local = datetime.now(tzinfo).replace(minute=0, second=0, microsecond=0, tzinfo=None)
+    start_of_day = now_local.replace(hour=0)
+    end_of_day   = start_of_day + timedelta(days=1)
+    
     d = d.sort_values("ts")
-
+    
     # keep only today's 24h window (naive)
     d = d[(d["ts"] >= start_of_day) & (d["ts"] < end_of_day)].copy()
     if d.empty:
-        # fallback: use all provided rows, but still naive/locally aligned
-        d = df.copy()
-        ts = pd.to_datetime(d["ts"], errors="coerce")
-        if ts.dt.tz is None:
-            ts = ts.dt.tz_localize(tzinfo)
-        else:
-            ts = ts.dt.tz_convert(tzinfo)
-        d["ts"] = ts.dt.tz_localize(None)
-        d = d.sort_values("ts")
+        return chart  # nothing for today; bail out gracefully
+
+    # --- Ensure an hourly grid for TODAY, but only fill gaps AFTER 'now' ---
+    full_hours = pd.date_range(start=start_of_day, end=end_of_day, freq="H", inclusive="left")
+    orig = d.set_index("ts").sort_index()
+    d = orig.reindex(full_hours).rename_axis("ts").reset_index()
+    
+    # Only fill FUTURE (after now). Past remains exactly as-is.
+    future_mask = d["ts"] > now_local
+    filled = d.copy()
+    for col in ["temp_pess", "temp_opt"]:
+        # create candidates by time interpolation and padding
+        filled[col] = filled[col].interpolate(method="time", limit_direction="both").ffill().bfill()
+        # write back only into future rows
+        d.loc[future_mask, col] = filled.loc[future_mask, col]
+    
+    # split past/future using floored 'now'
+    past   = d[d["ts"] <= now_local]
+    future = d[d["ts"] >  now_local]
+
 
     # --- NEW: ensure an hourly grid and fill missing temps ---
     # reindex to every hour today and interpolate
