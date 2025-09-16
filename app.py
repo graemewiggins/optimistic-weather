@@ -946,7 +946,7 @@ if st.button("Get forecast", type="primary"):
     end = start + pd.Timedelta(hours=23)
     hourly_rolling = hourly_all[(hourly_all["time"] >= start) & (hourly_all["time"] <= end)].copy()
     
-    full 00:00–24:00 window for TODAY (local tz, naive)
+    # full 00:00–24:00 window for TODAY (local tz, naive)
     day_start = pd.Timestamp.now(tz).normalize().tz_localize(None)
     day_end   = day_start + pd.Timedelta(days=1)
     hourly_today = hourly_all[(hourly_all["time"] >= day_start) & (hourly_all["time"] < day_end)].copy()
