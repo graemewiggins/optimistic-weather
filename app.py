@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import time
 import json
+import numpy as np
 
 # Set page config
 st.set_page_config(
@@ -457,7 +458,8 @@ def main():
     today = datetime.now().date()
     today_hourly = optimal_forecasts[
         (optimal_forecasts['date'] == today) & 
-        (optimal_forecasts['hour'].notna())
+        (optimal_forecasts['hour'].notna()) &
+        (optimal_forecasts['hour'].notnull())
     ].copy()
     
     if not today_hourly.empty:
@@ -470,7 +472,13 @@ def main():
             for j, row in enumerate(hourly_list[i:i+4]):
                 if j < len(cols):
                     with cols[j]:
-                        time_str = f"{row['hour']:02d}:00"
+                        # Handle potential NaN values in hour
+                        hour_val = row.get('hour')
+                        if pd.isna(hour_val) or hour_val is None:
+                            time_str = "All Day"
+                        else:
+                            time_str = f"{int(hour_val):02d}:00"
+                        
                         temp_str = f"{row['temperature']:.1f}°C"
                         rain_str = f"{row['rain_chance']:.0f}%"
                         
@@ -497,7 +505,10 @@ def main():
     # 7-day forecast
     st.subheader("📅 7-Day Forecast")
     
-    daily_forecasts = optimal_forecasts[optimal_forecasts['hour'].isna()].copy()
+    daily_forecasts = optimal_forecasts[
+        (optimal_forecasts['hour'].isna()) | 
+        (optimal_forecasts['hour'].isnull())
+    ].copy()
     
     if not daily_forecasts.empty:
         for _, row in daily_forecasts.iterrows():
